@@ -5,6 +5,7 @@ happen in one transaction that is committed only after the whole operation succe
 """
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -21,6 +22,10 @@ from app.api.v1.trading_schemas import (
     OrderResponse,
     OrderSubmitResponse,
     PortfolioResponse,
+    CorporateActionAdjustmentResponse,
+    DailyPnlResponse,
+    DividendCreditResponse,
+    PendingAdjustmentResponse,
     PositionResponse,
     ProcessResponse,
     RiskDecisionResponse,
@@ -30,10 +35,12 @@ from app.api.v1.trading_schemas import (
 )
 from app.core.clock import Clock, utc_now
 from app.core.config import Settings
-from app.db.enums import OrderSource, OrderStatus
-from app.db.models import Fill, Order, Position, RiskDecision, User
+from app.db.enums import EXECUTION_MODE_POLICY, AdjustmentStatus, OrderSource, OrderStatus
+from app.db.models import CorporateActionAdjustment, DividendCredit, Fill, Order, Position, RiskDecision, User
 from app.db.scoping import owned_select
-from app.exchange.costs import CostModel
+from app.exchange.corporate_actions import CorporateActionService
+from app.exchange.costs import CostScheduleError, load_cost_schedule
+from app.exchange.portfolio import daily_pnl
 from app.exchange.service import OrderNotCancellable, OrderNotFound, lock_account
 from app.exchange.types import OrderIntent
 from app.orders.service import IdempotencyConflict, InvalidOrder, OrderService, TradingContext
@@ -87,6 +94,8 @@ def submit_order(
         take_profit_price=body.take_profit_price,
         strategy_id=body.strategy_id,
         strategy_max_risk_pct=body.strategy_max_risk_pct,
+        signal_at=body.signal_at,
+        product=body.product,
     )
     try:
         result = OrderService(ctx).submit(user.id, intent)
@@ -286,6 +295,53 @@ def list_risk_decisions(
     )
 
 
+# ---- corporate actions (B4) and daily P&L (B10) ---------------------------------------------------------
+
+
+@router.get("/portfolio/corporate-actions/pending", response_model=list[PendingAdjustmentResponse])
+def pending_corporate_actions(user: User = Depends(get_current_user), ctx: TradingContext = Depends(get_trading)):
+    """The caller's positions frozen by a split/bonus/other corporate action (read-only; adjustments are applied by
+    operators through /api/v1/operator)."""
+    out = []
+    for p in CorporateActionService(ctx.db, ctx.exchange, ctx.clock).pending(user.id):
+        a = p.action
+        out.append(
+            PendingAdjustmentResponse(
+                instrument_id=p.position.instrument_id, position_id=p.position.id, quantity=p.position.quantity,
+                corporate_action_id=a.id, action_type=a.action_type, ex_date=a.ex_date,
+                ratio_numerator=a.ratio_numerator, ratio_denominator=a.ratio_denominator, source=a.source,
+                adjustable=p.adjustable,
+                last_attempt_status=p.last_attempt.status if p.last_attempt else None,
+                last_attempt_reason=p.last_attempt.reason if p.last_attempt else None,
+            )
+        )
+    return out
+
+
+@router.get("/portfolio/corporate-actions/adjustments", response_model=list[CorporateActionAdjustmentResponse])
+def list_corporate_action_adjustments(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return list(
+        db.scalars(owned_select(CorporateActionAdjustment, user.id).order_by(CorporateActionAdjustment.id.desc()))
+    )
+
+
+@router.get("/portfolio/dividends", response_model=list[DividendCreditResponse])
+def list_dividend_credits(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The caller's dividend credits and recorded refusals (read-only; credits are applied by operators)."""
+    return list(db.scalars(owned_select(DividendCredit, user.id).order_by(DividendCredit.id.desc())))
+
+
+@router.get("/portfolio/pnl/daily", response_model=DailyPnlResponse)
+def get_daily_pnl(
+    session_date: date = Query(..., description="exchange-local (IST) trading date"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Realized P&L attributed to the simulated session date (not the processing date)."""
+    d = daily_pnl(db, user.id, session_date)
+    return DailyPnlResponse(**d.__dict__)
+
+
 # ---- exchange processing and status ---------------------------------------------------------
 
 
@@ -306,22 +362,35 @@ def process_orders(user: User = Depends(get_current_user), ctx: TradingContext =
 
 @router.get("/exchange/status", response_model=ExchangeStatusResponse)
 def exchange_status(
-    _: User = Depends(get_current_user), settings: Settings = Depends(get_settings_dep)
+    _: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings_dep),
+    clock: Clock = Depends(get_clock),
 ) -> ExchangeStatusResponse:
-    costs = CostModel.from_settings(settings)
+    from app.exchange.service import session_date_of
+
+    today = session_date_of(clock())
+    ctx_costs, cost_problem = None, None
+    if settings.exchange_cost_schedule_path:
+        try:
+            ctx_costs = load_cost_schedule(settings.exchange_cost_schedule_path).resolve(settings.exchange_product, today)
+        except CostScheduleError as e:
+            cost_problem = str(e)
+    else:
+        cost_problem = "no cost schedule is configured (EXCHANGE_COST_SCHEDULE_PATH)"
+    costs = ctx_costs
+    mode = settings.execution_mode
     blocking = []
-    if settings.execution_price_source == "disabled":
-        blocking.append("SOURCE_DISABLED: no execution-price source is approved (decision D4)")
-    if not settings.execution_approved_price_bases:
-        blocking.append("NO_APPROVED_PRICE_BASIS")
-    if not settings.execution_approved_providers:
-        blocking.append("NO_APPROVED_PROVIDER")
-    elif len(settings.execution_approved_providers) != 1:
-        blocking.append("AMBIGUOUS_PROVIDER: exactly one provider must be approved")
-    if costs is None:
-        blocking.append("COSTS_NOT_CONFIGURED: " + ", ".join(CostModel.missing_settings(settings)))
+    if mode == "disabled":
+        blocking.append("EXECUTION_DISABLED: EXECUTION_MODE is disabled (decision D4)")
+    else:
+        blocking.extend(f"CONFIG_INVALID: {p}" for p in settings.execution_config_problems(today))
+    if mode == "disabled" and cost_problem:
+        blocking.append(f"COSTS_NOT_CONFIGURED: {cost_problem}")
+    policy = EXECUTION_MODE_POLICY.get(mode)
     return ExchangeStatusResponse(
-        execution_price_source=settings.execution_price_source,
+        execution_mode=mode,
+        execution_policy=policy,
+        execution_approval_reference=settings.execution_approval_reference,
         execution_model="NEXT_BAR_OPEN: fills at the open of the first finalized bar after acceptance",
         execution_enabled=not blocking,
         approved_price_bases=settings.execution_approved_price_bases,
@@ -330,4 +399,24 @@ def exchange_status(
         costs_configured=costs is not None,
         cost_model=costs.snapshot() if costs else None,
         blocking_reasons=blocking,
+        disclosures=DISCLOSURES[mode],
     )
+
+
+DISCLOSURES = {
+    "disabled": ["Paper trading only. No order can fill while execution is disabled."],
+    "verified_next_bar_open": [
+        "Paper trading only; no real-money execution exists.",
+        "Fills are simulated at the open of the next finalized bar from verified, approved data.",
+    ],
+    "simulation_provider_native": [
+        "Paper trading only; no real-money execution exists.",
+        "SIMULATION ONLY: fills are retrospective simulations at the open of the next finalized 5-minute bar, priced "
+        "from UNVERIFIED_PROVIDER_NATIVE provider data (Yahoo Finance). They are not verified executions and do not "
+        "represent prices that were or could have been traded.",
+        "Yahoo Finance daily OHLCV history is split-adjusted; intraday restatement after splits is untested. Bars whose "
+        "basis is ambiguous around a corporate action are rejected; positions are not adjusted for corporate actions.",
+        "Five-year intraday backtesting is NOT available at launch: Yahoo provides about 60 days of 5-minute history; "
+        "the local archive grows only prospectively from the date collection started.",
+    ],
+}

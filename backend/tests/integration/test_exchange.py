@@ -103,7 +103,8 @@ def test_an_unverified_next_bar_blocks_the_fill(env):
     env["clock"].now = NOW + timedelta(minutes=6)
     run(env)
     reload(env, r.order)
-    assert r.order.status is OrderStatus.PENDING and count(env["db"], Fill) == 0
+    assert r.order.status is OrderStatus.CANCELLED and count(env["db"], Fill) == 0
+    assert r.order.cancel_reason.startswith("FILL_BAR_INELIGIBLE: UNVERIFIED_BASIS")
 
 
 def test_stale_observation_blocks_new_orders(env):
@@ -141,13 +142,15 @@ def test_ambiguous_provider_configuration_executes_nothing(env):
     reference(env)
     s = enabled_settings(env["settings"], execution_approved_providers=["fixture", "other"])
     r = go(env, intent(env["inst"]), settings=s)
-    assert r.order.status is OrderStatus.REJECTED and "NO_DATA" in r.order.reject_reason
+    assert r.order.status is OrderStatus.REJECTED and "CONFIG_INVALID" in r.order.reject_reason
+    assert "exactly one provider" in r.order.reject_reason
 
 
 def test_missing_cost_assumptions_block_execution(env):
     reference(env)
-    r = go(env, intent(env["inst"]), settings=enabled_settings(env["settings"], exchange_gst_pct=None))
-    assert r.order.status is OrderStatus.REJECTED and "COSTS_NOT_CONFIGURED" in r.order.reject_reason
+    r = go(env, intent(env["inst"]), settings=enabled_settings(env["settings"], exchange_cost_schedule_path=None))
+    assert r.order.status is OrderStatus.REJECTED and "CONFIG_INVALID" in r.order.reject_reason
+    assert "EXCHANGE_COST_SCHEDULE_PATH" in r.order.reject_reason
 
 
 def test_restated_bars_are_never_used(env):
@@ -178,7 +181,9 @@ def test_orders_never_fill_at_submission(env):
     r = go(env, intent(env["inst"], qty=10))
     assert r.order.status is OrderStatus.PENDING and r.order.filled_quantity == 0
     assert r.order.accepted_at == NOW and r.order.risk_budget == D("1000")  # 1 % of 100000
-    assert r.order.reserved_cash == D("1000.5") + D("1.834917")
+    exact = D("1000.5") + D("1.834917")
+    # reservation = worst case: exact cost plus at most one rounding quantum per component (GST included)
+    assert exact <= r.order.reserved_cash <= exact + D("0.00002")
     assert count(env["db"], Fill) == 0
 
 
@@ -202,10 +207,15 @@ def test_buy_then_sell_accounting_is_exact_with_component_fees(env):
     run(env)
     fill = db.scalar(select(Fill).where(Fill.order_id == buy.order.id))
     assert (fill.price, fill.turnover, fill.fee) == (D("100.05"), D("1000.5"), D("1.834917"))
-    assert {k: D(v) for k, v in fill.fee_breakdown.items()} == {
-        "brokerage": D("1.0005"), "stt": D("0"), "txn_charge": D("0.30015"), "sebi_fee": D("0"),
-        "stamp_duty": D("0.30015"), "gst": D("0.234117"), "total": D("1.834917"),
+    comps = {k: D(v["charged"]) for k, v in fill.fee_breakdown["components"].items()}
+    assert comps == {
+        "BROKERAGE": D("1.0005"), "STT": D("0"), "TXN_CHARGE": D("0.30015"), "SEBI_FEE": D("0"), "IPFT": D("0"),
+        "STAMP_DUTY": D("0.30015"), "GST": D("0.234117"),
     }
+    assert D(fill.fee_breakdown["total"]) == D("1.834917")
+    assert fill.fee_breakdown["components"]["BROKERAGE"]["rate_id"] == "T-BRK-D"
+    assert fill.cost_model["schedule_version"] == "SYNTHETIC-TEST-1" and len(fill.cost_model["schedule_sha256"]) == 64
+    assert fill.realized_pnl == 0
     assert fill.provider_code == "fixture" and fill.price_basis is PriceBasis.AS_TRADED_VERIFIED
     assert cash(env) == D("98997.665083")
     pos = db.scalar(select(Position))
@@ -219,7 +229,9 @@ def test_buy_then_sell_accounting_is_exact_with_component_fees(env):
     run(env)
     sfill = db.scalar(select(Fill).where(Fill.order_id == sell.order.id))
     assert (sfill.price, sfill.turnover, sfill.fee) == (D("109.945"), D("1099.45"), D("4.435182"))
-    assert D(sfill.fee_breakdown["stt"]) == D("2.748625") and D(sfill.fee_breakdown["stamp_duty"]) == 0
+    sc = sfill.fee_breakdown["components"]
+    assert D(sc["STT"]["charged"]) == D("2.748625") and "STAMP_DUTY" not in sc and D(sc["DP_CHARGE"]["charged"]) == 0
+    assert sfill.realized_pnl == D("98.95")
     db.expire_all()
     pos = db.scalar(select(Position))
     assert pos.quantity == 0 and pos.avg_entry_price is None and pos.stop_loss_price is None
@@ -235,7 +247,7 @@ def test_market_order_is_cancelled_when_the_next_bar_is_missing(env):
     bar(env, "100")  # 05:10 bar
     run(env)
     reload(env, r.order)
-    assert r.order.status is OrderStatus.CANCELLED and r.order.cancel_reason.startswith("NEXT_BAR_UNAVAILABLE")
+    assert r.order.status is OrderStatus.CANCELLED and r.order.cancel_reason.startswith("DATA_GAP")
     assert r.order.reserved_cash == 0 and count(env["db"], Fill) == 0
 
 
@@ -289,7 +301,7 @@ def test_limit_buy_fills_at_open_below_limit_or_at_limit_when_crossed(env):
     s = enabled_settings(env["settings"], exchange_max_volume_participation=D("0.01"))
     r = go(env, intent(env["inst"], qty=25, otype=OrderType.LIMIT, limit_price=D("101")), settings=s)
     assert r.order.status is OrderStatus.PENDING
-    assert r.order.reserved_cash == D("2525") + COSTS_FEE_2525
+    assert D("2525") + COSTS_FEE_2525 <= r.order.reserved_cash <= D("2525") + COSTS_FEE_2525 + D("0.00002")
 
     for open_, low, expected_filled, expected_kind in [
         ("103", "101", 0, None),  # only touches the limit (low == limit): not a fill
@@ -306,7 +318,7 @@ def test_limit_buy_fills_at_open_below_limit_or_at_limit_when_crossed(env):
     assert all(f.price <= D("101") for f in fills)
     assert r.order.status is OrderStatus.FILLED and r.order.reserved_cash == 0
     # brokerage cap is per order across partial fills
-    assert sum(D(f.fee_breakdown["brokerage"]) for f in fills) <= D("20")
+    assert sum(D(f.fee_breakdown["components"]["BROKERAGE"]["charged"]) for f in fills) <= D("20")
 
 
 COSTS_FEE_2525 = D("4.63085")  # fees on 2525: brokerage 2.525 + txn .7575 + stamp .7575 + gst .59085
@@ -362,7 +374,7 @@ def test_brokerage_cap_applies_once_per_order_across_partial_fills(env):
     process(env["db"], s, env["clock"], env["account"])
     fills = env["db"].scalars(select(Fill).order_by(Fill.seq)).all()
     assert [f.quantity for f in fills] == [500, 400] and reload(env, order).status is OrderStatus.FILLED
-    assert [D(f.fee_breakdown["brokerage"]) for f in fills] == [D("20"), D("0")]
+    assert [D(f.fee_breakdown["components"]["BROKERAGE"]["charged"]) for f in fills] == [D("20"), D("0")]
 
 
 def test_market_remainder_is_cancelled_after_the_next_bar(env):
@@ -780,9 +792,9 @@ def _version(engine):
 
 def test_downgrading_0005_is_refused_while_orders_exist(env, engine):
     _filled(env)
-    with pytest.raises(RuntimeError, match="cannot downgrade 0005"):
+    with pytest.raises(RuntimeError, match="cannot downgrade 0008"):
         _downgrade(engine, "0004")
-    assert _version(engine) == "0005"
+    assert _version(engine) == "0008"
     with engine.connect() as conn:
         assert conn.execute(text("select count(*) from fills")).scalar() == 1
 
@@ -794,7 +806,7 @@ def test_downgrading_0004_is_refused_while_risk_records_exist(env, engine):
             _downgrade(engine, "0003")
     finally:
         _upgrade(engine)
-    assert _version(engine) == "0005"
+    assert _version(engine) == "0008"
 
 
 def test_0005_backfills_accepted_at_for_existing_terminal_orders(env, engine):
@@ -811,7 +823,10 @@ def test_0005_backfills_accepted_at_for_existing_terminal_orders(env, engine):
             ))
     finally:
         _upgrade(engine)
-    assert _version(engine) == "0005"
+    assert _version(engine) == "0008"
     with engine.connect() as conn:
-        accepted, created = conn.execute(text("select accepted_at, created_at from orders where client_order_id='legacy'")).one()
-    assert accepted == created
+        accepted, created, signal, policy = conn.execute(text(
+            "select accepted_at, created_at, signal_at, execution_policy from orders where client_order_id='legacy'"
+        )).one()
+    assert accepted == created == signal  # 0005 and 0006 backfills
+    assert policy is None  # never filled: no policy is invented for it
