@@ -785,6 +785,15 @@ def _upgrade(engine):
         command.upgrade(alembic_config(conn), "head")
 
 
+def _head():
+    """The single Alembic head (not hard-coded: later migrations, e.g. Phase 3's 0009, extend the chain)."""
+    from alembic.script import ScriptDirectory
+
+    from tests.conftest import alembic_config
+
+    return ScriptDirectory.from_config(alembic_config(None)).get_current_head()
+
+
 def _version(engine):
     with engine.connect() as conn:
         return conn.execute(text("select version_num from alembic_version")).scalar()
@@ -794,7 +803,7 @@ def test_downgrading_0005_is_refused_while_orders_exist(env, engine):
     _filled(env)
     with pytest.raises(RuntimeError, match="cannot downgrade 0008"):
         _downgrade(engine, "0004")
-    assert _version(engine) == "0008"
+    assert _version(engine) == _head()  # nothing was undone
     with engine.connect() as conn:
         assert conn.execute(text("select count(*) from fills")).scalar() == 1
 
@@ -806,7 +815,7 @@ def test_downgrading_0004_is_refused_while_risk_records_exist(env, engine):
             _downgrade(engine, "0003")
     finally:
         _upgrade(engine)
-    assert _version(engine) == "0008"
+    assert _version(engine) == _head()  # nothing was undone
 
 
 def test_0005_backfills_accepted_at_for_existing_terminal_orders(env, engine):
@@ -823,7 +832,7 @@ def test_0005_backfills_accepted_at_for_existing_terminal_orders(env, engine):
             ))
     finally:
         _upgrade(engine)
-    assert _version(engine) == "0008"
+    assert _version(engine) == _head()  # nothing was undone
     with engine.connect() as conn:
         accepted, created, signal, policy = conn.execute(text(
             "select accepted_at, created_at, signal_at, execution_policy from orders where client_order_id='legacy'"

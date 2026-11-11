@@ -1,4 +1,4 @@
-"""Backtest runs and their results (Phase 3, Step 4B; migration 0004).
+"""Backtest runs and their results (Phase 3, Step 4B; migration 0009).
 
 Every table is user-owned. Result rows carry their run's owner; the insert trigger accepts a result row only for a
 RUNNING run with the same owner, so a result can never be attached to another user's run. Rows are immutable once written (database triggers): a run's
