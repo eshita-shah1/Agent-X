@@ -161,3 +161,61 @@ class AdjustmentStatus(str, enum.Enum):
     APPLIED = "APPLIED"  # the position was adjusted; valuation and exits resume
     REJECTED = "REJECTED"  # validation failed; the position stays frozen
     BLOCKED_FRACTIONAL = "BLOCKED_FRACTIONAL"  # a fractional entitlement needs a cash-in-lieu price; stays frozen
+
+
+# ---- Phase 5: autonomous agent orchestration (migration 0012) -------------------------------------------------------
+
+
+class AgentStatus(str, enum.Enum):
+    """Persisted lifecycle of an account's agent. Entry blocking by the kill switch is NOT a status: the Phase 4
+    `risk_state.kill_switch_engaged` flag stays the only switch (approved decision D11)."""
+
+    STOPPED = "STOPPED"  # no strategy evaluation, no agent orders; Phase 4 protective exits are still run (D10)
+    RUNNING = "RUNNING"  # evaluation, entries and exits
+    PAUSED = "PAUSED"  # monitor mode: evaluation and exits continue, entries are suppressed
+    ERROR = "ERROR"  # reconciliation or repeated cycle failure; no agent orders until resumed or stopped
+
+
+class AgentMode(str, enum.Enum):
+    EXECUTION = "EXECUTION"  # orders go through OrderService (execution was available when the agent started)
+    SIGNALS_ONLY = "SIGNALS_ONLY"  # execution was disabled at start: signals are recorded, no order is ever submitted
+
+
+class AgentCycleStatus(str, enum.Enum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"  # the worker died during the cycle (found by the next cycle)
+
+
+class AgentInstrumentStatus(str, enum.Enum):
+    OK = "OK"
+    MANUAL_INTERVENTION = "MANUAL_INTERVENTION"  # a manual order/fill or an adjustment touched the instrument (D7)
+    ORPHANED_OVERNIGHT = "ORPHANED_OVERNIGHT"  # an agent position survived its session (D2): never carried over
+    DATA_ERROR = "DATA_ERROR"  # the archive could not be replayed for this instrument
+
+
+class AgentDecisionKind(str, enum.Enum):
+    SELECTION = "SELECTION"  # the locked session selection for one instrument
+    EVALUATION = "EVALUATION"  # one finalized bar evaluated by the acting configuration
+    OWED_EXIT = "OWED_EXIT"  # a submission of an exit still owed from an earlier signal (D6)
+
+
+class AgentDecisionOutcome(str, enum.Enum):
+    SELECTED = "SELECTED"
+    NO_SELECTION = "NO_SELECTION"
+    NO_SIGNAL = "NO_SIGNAL"
+    ENTRY_SUBMITTED = "ENTRY_SUBMITTED"  # the order's own status says whether risk/exchange accepted it
+    EXIT_SUBMITTED = "EXIT_SUBMITTED"
+    EXIT_OWED = "EXIT_OWED"  # exit signal recorded; submitted when an eligible price exists
+    EXIT_ALREADY_OWED = "EXIT_ALREADY_OWED"
+    SIGNALS_ONLY_NOT_SUBMITTED = "SIGNALS_ONLY_NOT_SUBMITTED"
+    SUPPRESSED_PAUSED = "SUPPRESSED_PAUSED"
+    SUPPRESSED_KILL_SWITCH = "SUPPRESSED_KILL_SWITCH"
+    SUPPRESSED_INSTRUMENT_BLOCKED = "SUPPRESSED_INSTRUMENT_BLOCKED"
+    SUPPRESSED_POSITION_OR_ORDER = "SUPPRESSED_POSITION_OR_ORDER"
+    SUPPRESSED_LATE_SIGNAL = "SUPPRESSED_LATE_SIGNAL"  # not the latest eligible bar (D5)
+    SUPPRESSED_PRICE_NOT_ELIGIBLE = "SUPPRESSED_PRICE_NOT_ELIGIBLE"
+    SUPPRESSED_INVALID_LEVELS = "SUPPRESSED_INVALID_LEVELS"
+    SUPPRESSED_NO_QUANTITY = "SUPPRESSED_NO_QUANTITY"
+    SUPPRESSED_NOT_HELD = "SUPPRESSED_NOT_HELD"  # an exit signal with no agent position to exit

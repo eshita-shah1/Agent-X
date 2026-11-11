@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
-import { HelpCircle, Pause, Play, Square } from 'lucide-react';
+import { useState } from 'react';
+import { HelpCircle } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PageFooter } from '@/components/layout/PageFooter';
-import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -10,32 +9,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { AgentControlPanel } from '@/components/agent/AgentControlPanel';
 import { CandlestickChart } from '@/components/charts/CandlestickChart';
 import { TradeHistoryTable } from '@/components/dashboard/TradeHistoryTable';
 import { TradeDetailModal } from '@/components/dashboard/TradeDetailModal';
-import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
-import { useAppStore } from '@/store/useAppStore';
 import type { AgentTrade } from '@/types/trading';
 
 export function DashboardPage() {
-  const agentStatus = useAppStore((s) => s.agentStatus);
-  const startAgent = useAppStore((s) => s.startAgent);
-  const pauseAgent = useAppStore((s) => s.pauseAgent);
-  const triggerKillSwitch = useAppStore((s) => s.triggerKillSwitch);
-  const executeSimulatedAgentTrade = useAppStore((s) => s.executeSimulatedAgentTrade);
-
-  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<AgentTrade | null>(null);
-
-  // When agent is running, simulate occasional paper execution updates
-  useEffect(() => {
-    if (agentStatus !== 'running') return;
-    const timer = setInterval(() => {
-      executeSimulatedAgentTrade();
-    }, 25_000);
-    return () => clearInterval(timer);
-  }, [agentStatus, executeSimulatedAgentTrade]);
 
   return (
     <div className="space-y-4">
@@ -43,58 +25,28 @@ export function DashboardPage() {
         title="Dashboard"
         subtitle="Your strategies. A risk-free proving ground."
         actions={
-          <>
-            {agentStatus === 'running' ? (
-              <Button variant="default" onClick={pauseAgent}>
-                <Pause className="h-3.5 w-3.5" />
-                Pause Agent
-              </Button>
-            ) : (
-              <Button variant="default" onClick={startAgent}>
-                <Play className="h-3.5 w-3.5" />
-                Start Agent
-              </Button>
-            )}
-
-            <Button
-              variant="dangerOutline"
-              onClick={() => setKillConfirmOpen(true)}
-            >
-              <Square className="h-3.5 w-3.5" />
-              Kill Switch
-            </Button>
-
-            <button
-              type="button"
-              onClick={() => setHelpOpen(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#E4E4E7] bg-white text-[#71717A] transition-colors hover:bg-[#F9FAFB] hover:text-[#18181B]"
-              aria-label="Dashboard help"
-              title="About AgentX Dashboard"
-            >
-              <HelpCircle className="h-4 w-4" />
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#E4E4E7] bg-white text-[#71717A] transition-colors hover:bg-[#F9FAFB] hover:text-[#18181B]"
+            aria-label="Dashboard help"
+            title="About AgentX Dashboard"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </button>
         }
       />
 
-      {/* Main Lightweight Candlestick + Volume Chart */}
+      {/* Real agent state and controls (Phase 5 backend); never mock data */}
+      <AgentControlPanel />
+
+      {/* Main Lightweight Candlestick + Volume Chart (mock data, see docs/FRONTEND.md) */}
       <CandlestickChart height={355} />
 
-      {/* 13-Column Agent Activity / Trade History Table */}
+      {/* Trade history table: mock demo data, not agent records */}
       <TradeHistoryTable onSelectTrade={setSelectedTrade} />
 
       <PageFooter />
-
-      {/* Kill Switch Emergency Confirmation */}
-      <ConfirmDialog
-        open={killConfirmOpen}
-        onOpenChange={setKillConfirmOpen}
-        title="Activate Emergency Kill Switch?"
-        description="This immediately halts all automated AgentX strategies and flattens open simulated positions at current market prices."
-        confirmLabel="Halt Agent & Flatten"
-        destructive
-        onConfirm={triggerKillSwitch}
-      />
 
       {/* Trade View Details Dialog */}
       <TradeDetailModal
@@ -113,13 +65,22 @@ export function DashboardPage() {
           </DialogHeader>
           <div className="space-y-2.5 text-[12.5px] leading-relaxed text-[#52525B]">
             <p>
-              <strong className="text-[#18181B]">Start Agent:</strong> Activates automated paper strategies against selected NSE/BSE instruments.
+              <strong className="text-[#18181B]">Agent control:</strong> the real agent state from the backend. Start,
+              pause, resume and stop change it; the panel shows the state the backend reports. While simulated
+              execution is disabled the agent runs SIGNALS_ONLY and never submits an order.
             </p>
             <p>
-              <strong className="text-[#18181B]">Kill Switch:</strong> Emergency halt that pauses agent execution and closes all active paper positions immediately.
+              <strong className="text-[#18181B]">Pause vs stop:</strong> a paused agent keeps evaluating and exiting
+              but opens nothing new; a stopped agent evaluates nothing. Neither sells your positions, and their
+              stop-loss/take-profit monitoring continues.
             </p>
             <p>
-              <strong className="text-[#18181B]">Instruments Panel:</strong> Click any index or stock on the right to inspect its OHLCV candlestick chart and volume.
+              <strong className="text-[#18181B]">Kill switch:</strong> blocks entries, cancels open orders and pauses
+              the agent. It never liquidates positions, and releasing it does not restart the agent.
+            </p>
+            <p>
+              <strong className="text-[#18181B]">Chart and trade history:</strong> demo data generated in the browser,
+              not market data or agent records.
             </p>
           </div>
         </DialogContent>

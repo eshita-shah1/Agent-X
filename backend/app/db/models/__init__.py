@@ -1,3 +1,11 @@
+from app.db.models.agent import (
+    AgentConfigVersion,
+    AgentCycle,
+    AgentDecision,
+    AgentEvent,
+    AgentInstance,
+    AgentInstrumentState,
+)
 from app.db.models.backtest import (
     BacktestEquityPoint,
     BacktestEvent,
@@ -32,6 +40,12 @@ from app.db.models.trading import (
 from app.db.models.user import AuditEvent, User, VirtualAccount
 
 __all__ = [
+    "AgentConfigVersion",
+    "AgentCycle",
+    "AgentDecision",
+    "AgentEvent",
+    "AgentInstance",
+    "AgentInstrumentState",
     "AdjustedCandle",
     "AuditEvent",
     "BacktestEquityPoint",

@@ -129,8 +129,9 @@ def test_no_application_code_assigns_a_verified_price_basis():
 
 def test_execution_code_exists_only_in_the_phase4_packages():
     # Phase 3 (decision D19) permits app/indicators, app/strategies and app/backtest(_runs); Phase 4 added the risk
-    # engine and Mock Exchange (app/risk, app/exchange, app/orders). Packages of later phases must still not exist.
-    forbidden_dirs = {"mock_exchange", "execution", "agent"}
+    # engine and Mock Exchange (app/risk, app/exchange, app/orders); Phase 5 (decision D14) added the agent
+    # orchestration package (app/agent), which places orders only through app/orders. No other execution package.
+    forbidden_dirs = {"mock_exchange", "execution"}
     assert not [p for p in APP.iterdir() if p.is_dir() and p.name in forbidden_dirs]
     # Order and execution vocabulary belongs to the Phase 4 packages only: market data, indicators, strategies and the
     # Phase 3 backtest (whose NEXT_BAR_OPEN_V1 fills are simulated on its own, never through the Mock Exchange) stay

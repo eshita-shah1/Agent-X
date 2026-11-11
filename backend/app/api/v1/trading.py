@@ -11,6 +11,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
+from app.agent.guards import risk_settings_change_problem
 from app.api.v1.deps import get_current_user, get_db, get_settings_dep
 from app.api.v1.trading_schemas import (
     CancelRequest,
@@ -50,8 +51,8 @@ from app.db.models import (
 )
 from app.db.scoping import owned_select
 from app.exchange.corporate_actions import CorporateActionService
-from app.exchange.costs import CostScheduleError, load_cost_schedule
 from app.exchange.portfolio import daily_pnl
+from app.exchange.readiness import execution_readiness
 from app.exchange.service import OrderNotCancellable, OrderNotFound, lock_account
 from app.exchange.types import OrderIntent
 from app.orders.service import IdempotencyConflict, InvalidOrder, OrderService, TradingContext
@@ -250,6 +251,10 @@ def get_risk_settings(user: User = Depends(get_current_user), ctx: TradingContex
 def put_risk_settings(
     body: RiskSettingsRequest, user: User = Depends(get_current_user), ctx: TradingContext = Depends(get_trading)
 ):
+    lock_account(ctx.db, user.id)  # the worker takes the same lock before it reads the limits
+    problem = risk_settings_change_problem(ctx.db, user.id)
+    if problem:
+        raise HTTPException(status.HTTP_409_CONFLICT, problem)
     saved = ctx.risk.save_settings(user.id, RiskSettingsInput(**body.model_dump()))
     ctx.db.commit()
     ctx.db.refresh(saved)
@@ -421,24 +426,9 @@ def exchange_status(
 ) -> ExchangeStatusResponse:
     from app.exchange.service import session_date_of
 
-    today = session_date_of(clock())
-    ctx_costs, cost_problem = None, None
-    if settings.exchange_cost_schedule_path:
-        try:
-            ctx_costs = load_cost_schedule(settings.exchange_cost_schedule_path).resolve(settings.exchange_product, today)
-        except CostScheduleError as e:
-            cost_problem = str(e)
-    else:
-        cost_problem = "no cost schedule is configured (EXCHANGE_COST_SCHEDULE_PATH)"
-    costs = ctx_costs
+    readiness = execution_readiness(settings, session_date_of(clock()))
+    costs, blocking = readiness.costs, readiness.blocking_reasons
     mode = settings.execution_mode
-    blocking = []
-    if mode == "disabled":
-        blocking.append("EXECUTION_DISABLED: EXECUTION_MODE is disabled (decision D4)")
-    else:
-        blocking.extend(f"CONFIG_INVALID: {p}" for p in settings.execution_config_problems(today))
-    if mode == "disabled" and cost_problem:
-        blocking.append(f"COSTS_NOT_CONFIGURED: {cost_problem}")
     policy = EXECUTION_MODE_POLICY.get(mode)
     return ExchangeStatusResponse(
         execution_mode=mode,

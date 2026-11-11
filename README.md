@@ -27,7 +27,7 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | Approved, committed and pushed |
 | 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
 | 4 | Risk engine and Mock Exchange | **Approved by the owner (2026-11-12).** Simulation-only staging approved; the staging run on real fresh data is pending the 2026-11-12 session. Simulated fills stay disabled outside staging until the real-environment items in [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md) §7.3 |
-| 5 | Agent orchestration | **Started (2026-11-12): scoping** |
+| 5 | Agent orchestration | **Implemented and tested, pending owner approval** (branch `phase-5-agent`, uncommitted). Runs SIGNALS_ONLY while execution is disabled; end-to-end paper execution awaits decision D15 ([docs/PHASE5.md](docs/PHASE5.md)) |
 | 6 | (Backtesting and Buy-and-Hold, moved into Phase 3) | Delivered in Phase 3 |
 | 7 | LLM layer and trading journal | Not started |
 | 8 | Hardening and deployment | Not started |
@@ -97,7 +97,8 @@ Open `Agent-X.code-workspace` in VS Code to work on the backend and frontend fro
 - [docs/API.md](docs/API.md): endpoints
 - [docs/PHASE4.md](docs/PHASE4.md): risk engine, Mock Exchange, decision D4, shared contracts, limitations
 - [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
-- [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends
+- [docs/PHASE5.md](docs/PHASE5.md): the autonomous paper-trading agent: lifecycle, decisions, reconciliation, worker, migration 0012, limitations
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends, the agent worker
 - [docs/STAGING.md](docs/STAGING.md) and [docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md): validation procedures
 - [docs/FRONTEND.md](docs/FRONTEND.md): the web UI (mock data only), how it connects to the API, and page-by-page integration gaps
 
@@ -121,7 +122,7 @@ boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 1. **Phase 3:** strategy and backtesting layer, implemented and approved; integrated with Phase 4 (migration `0009`).
 2. **Phase 4:** risk engine and Mock Exchange, implemented. Fills stay simulation-only until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)).
 3. **Decided:** the backtest and the Mock Exchange keep separate simulation models (intraday research vs delivery paper execution; [docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
-4. **Phase 5:** agent orchestration.
+4. **Phase 5:** agent orchestration, implemented and pending approval ([docs/PHASE5.md](docs/PHASE5.md)).
 5. **Phase 7:** LLM explanations and trading journal. The LLM explains decisions only and never decides them.
 6. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
 

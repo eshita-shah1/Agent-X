@@ -112,6 +112,9 @@ USER_OWNED_TABLES = {
     # match the run's)
     "backtest_runs", "backtest_instrument_results", "backtest_selection_decisions", "backtest_trades", "backtest_events",
     "backtest_equity_points",
+    # Phase 5 agent (migration 0012): an insert trigger requires every row to carry its agent's owner
+    "agent_instances", "agent_config_versions", "agent_cycles", "agent_decisions", "agent_events",
+    "agent_instrument_states",
 }
 
 

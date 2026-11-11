@@ -15,13 +15,8 @@ from sqlalchemy.orm import Session
 from app.backtest import PRICE_BASIS, BacktestBar, BacktestRefused, CorporateActionRecord, InstrumentData, RefusalCode
 from app.core.config import Settings
 from app.db.enums import InstrumentType, Timeframe, TradingStatus
+from app.strategies.configs import lookback_days  # shared with the agent (decision D13); re-exported
 from app.db.models import Candle, CorporateAction, DataProvider, Instrument
-
-
-def lookback_days(warmup_sessions: int) -> int:
-    """Calendar days loaded before `start` so that `warmup_sessions` prior sessions can be found (weekends and a
-    few closures included). If fewer exist, the engine shifts the warm-up into the period and discloses it."""
-    return 7 + 3 * warmup_sessions
 
 
 def check_instrument(session: Session, instrument_id: int) -> Instrument:
