@@ -382,3 +382,16 @@ def test_creating_the_application_starts_no_backtest(md_settings, registry, cloc
     with TestClient(create_app(md_settings, registry, clock)):
         pass
     assert counts(db)["backtest_runs"] == 0
+
+
+def test_a_backtest_never_routes_anything_through_the_phase4_execution_path(market_client, alice, inst, db, md_settings):
+    """Phase 3 fills are simulated by the backtest engine itself: a complete run (with Phase 4 execution disabled, its
+    default) creates no order, fill, ledger entry, position, risk decision or risk state."""
+    from app.db.models import CashLedgerEntry, Fill, Order, Position, RiskDecision, RiskState
+
+    assert md_settings.execution_mode == "disabled"
+    run = finished(market_client, alice[1], body([inst.id]))
+    assert run["status"] == "SUCCEEDED" and run["fill_model"] == "NEXT_BAR_OPEN_V1"
+    assert db.scalar(select(func.count()).select_from(BacktestTrade)) > 0
+    for model in (Order, Fill, CashLedgerEntry, Position, RiskDecision, RiskState):
+        assert db.scalar(select(func.count()).select_from(model)) == 0, model.__tablename__
