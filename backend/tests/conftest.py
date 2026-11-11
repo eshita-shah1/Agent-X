@@ -56,8 +56,10 @@ def migrated(engine: Engine) -> None:
         command.upgrade(alembic_config(conn), "head")
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def clean_db(engine: Engine, migrated) -> None:
+    """Truncate every table. Applied automatically to integration tests (tests/integration/conftest.py);
+    pure unit tests never touch the database, so they skip this cost."""
     tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
     with engine.begin() as conn:
         # TRUNCATE does not fire the row-level immutability triggers; it is the test reset path only.
@@ -75,6 +77,65 @@ def db(engine: Engine) -> Iterator[Session]:
 def client(test_settings: Settings) -> Iterator[TestClient]:
     with TestClient(create_app(test_settings)) as c:
         yield c
+
+
+# ---- market data fixtures (fake provider, fixed clock, seeded registry) -----------------------------
+
+
+@pytest.fixture
+def clock():
+    from tests.support import FakeClock
+
+    return FakeClock()
+
+
+@pytest.fixture
+def provider(clock):
+    from tests.support import FakeProvider
+
+    return FakeProvider(clock=clock)
+
+
+@pytest.fixture
+def registry(provider):
+    from app.marketdata.providers.registry import ProviderRegistry
+
+    return ProviderRegistry({"yahoo": provider})
+
+
+@pytest.fixture
+def md_settings(test_settings):
+    """Test database + no politeness pause between instruments."""
+    return test_settings.model_copy(update={"marketdata_request_pause_seconds": 0.0})
+
+
+@pytest.fixture
+def seeded(db, registry):
+    from app.marketdata.seed import seed_registry
+
+    return seed_registry(db, registry.descriptors())
+
+
+@pytest.fixture
+def svc(db, registry, md_settings, clock, seeded):
+    from app.marketdata.service import MarketDataService
+
+    return MarketDataService(db, registry, md_settings, clock)
+
+
+@pytest.fixture
+def market_client(md_settings, registry, clock):
+    with TestClient(create_app(md_settings, registry, clock)) as c:
+        yield c
+
+
+@pytest.fixture
+def make_market_user(market_client):
+    def _make():
+        info = register_user(market_client)
+        return info, auth_headers(login(market_client, info["email"]))
+
+    return _make
 
 
 _counter = itertools.count()
