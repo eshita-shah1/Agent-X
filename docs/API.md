@@ -76,10 +76,60 @@ start-up.
 | GET | `/providers/health` | Provider status and its facts (last attempt/success/failure, error kind and message, consecutive failures, last observed market timestamp, last ingestion), per-instrument freshness (`status`, observed `data_age_seconds`, `lag_seconds`, `latest_finalized_bar_end`), and the thresholds, each labelled `PROVISIONAL` (configurable, descriptive only; they gate nothing). A provider never used is `UNKNOWN`; an instrument with no data is `UNAVAILABLE`, never healthy. |
 | GET | `/providers/capabilities` | Optional `provider`. Every capability with status `DOCUMENTED`, `VERIFIED`, `UNSUPPORTED` or `UNKNOWN`, plus the probe evidence. |
 
+## Phase 4: orders, portfolio, risk, exchange
+
+All endpoints below require authentication and act only on the caller's own data. Monetary
+and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/v1/orders` | Submit. `201` new order (it may be `REJECTED`, with a reason), `200` idempotent replay, `409` client_order_id reused for a different order, `422` invalid request or instrument |
+| GET | `/api/v1/orders?status=&limit=` | Own orders, newest first |
+| GET | `/api/v1/orders/{id}` | Order with its fills and risk decision; `404` if not own |
+| POST | `/api/v1/orders/{id}/cancel` | Body `{"reason"?: str}`; `409` if not open; `404` if not own |
+| GET | `/api/v1/portfolio` | Cash, reserved, available, positions, realized/unrealized P&L, equity (`null` when any position cannot be marked with an eligible price) |
+| GET | `/api/v1/portfolio/fills?limit=` | Executions with price provenance |
+| GET | `/api/v1/risk/settings` | `404` until configured (no defaults) |
+| PUT | `/api/v1/risk/settings` | All fields required (see below) |
+| GET | `/api/v1/risk/state` | Kill switch and equity references |
+| POST | `/api/v1/risk/kill-switch` | `{"engaged": bool, "reason": str}`; engaging cancels all open orders |
+| GET | `/api/v1/risk/decisions?limit=` | Risk decision log |
+| GET | `/api/v1/exchange/status` | Whether execution is enabled and why not (`blocking_reasons`) |
+
+### `POST /api/v1/orders`
+```json
+{
+  "client_order_id": "ord-2026-11-11-001",
+  "instrument_id": 1,
+  "side": "BUY",
+  "order_type": "LIMIT",
+  "quantity": 10,
+  "limit_price": "1450.50",
+  "stop_loss_price": "1420.00",
+  "take_profit_price": "1500.00",
+  "strategy_id": "optional",
+  "strategy_max_risk_pct": "0.5"
+}
+```
+- `client_order_id`: 1–64 chars `[A-Za-z0-9._:-]`, unique per user (idempotency key).
+- `limit_price` is required for `LIMIT` and forbidden for `MARKET`. Prices are > 0 with at most 6 dp.
+- Entries (`BUY`) need `stop_loss_price` (otherwise risk rejects with `STOP_LOSS_REQUIRED`). `SELL` may not carry stop/take-profit.
+- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
+
+### `PUT /api/v1/risk/settings`
+```json
+{
+  "max_risk_per_trade_pct": "1", "max_position_allocation_pct": "20",
+  "max_portfolio_exposure_pct": "100", "max_daily_loss_pct": "5", "max_drawdown_pct": "10",
+  "max_position_quantity": null, "resize_allowed": true
+}
+```
+Percentages are in (0, 100]. `max_position_quantity` must be sent explicitly (`null` = no share-count cap).
+
 ## Errors
 Errors use FastAPI's default `{"detail": ...}` shape; some market-data errors carry a structured detail
 `{"code": ..., "message": ...}` (`INSTRUMENT_DISABLED`, `INGESTION_ALREADY_RUNNING`, `NO_INGESTABLE_INSTRUMENTS`,
 `PROVIDER_NOT_CONFIGURED`). `401` responses carry `WWW-Authenticate: Bearer`.
 
 ## Not yet available
-Strategies, agent, risk, exchange, portfolio, backtests, benchmarks, journal and reports arrive in later phases.
+Strategies, agent, backtests, benchmarks, journal and reports arrive in later phases.
