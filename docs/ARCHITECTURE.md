@@ -1,6 +1,8 @@
-# Agent-X Backend — Architecture (Phase 1)
+# Agent-X Backend — Architecture (Phases 1-2)
 
-Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 contains only the foundation. Market-data ingestion, Yahoo integration, strategies, regime detection, the Risk Engine, the Mock Exchange, the agent, backtesting and LLM features are **not implemented**.
+Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 is the foundation (auth,
+isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)). Strategies, regime
+detection, the Risk Engine, the Mock Exchange, the agent, backtesting and LLM features are **not implemented**.
 
 ## Layout
 
@@ -11,16 +13,18 @@ backend/
     core/              config (pydantic-settings), security (argon2id, JWT), logging
     db/
       base.py          declarative Base, naming convention, UserOwnedMixin
-      enums.py         InstrumentType, Timeframe, PriceBasis, AdjustmentMethod, CorporateActionType
-      session.py       engine / sessionmaker / per-request session
+      enums.py         InstrumentType, Timeframe, PriceBasis, AdjustmentMethod, CorporateActionType, job/batch enums
+      session.py       engine (UTC session timezone) / sessionmaker / per-request session
       scoping.py       owned_select(): user-scoped queries
-      models/          user.py (users, virtual_accounts, audit_events), market.py (market data)
-    api/v1/            auth, account routers; deps (get_current_user, get_db); schemas
-  alembic/             migrations (0001_foundation)
-  tests/               unit/ and integration/ (real PostgreSQL)
+      models/          user.py, market.py (instruments, candles, adjusted candles, corporate actions), ingestion.py
+    marketdata/        providers/ (base interfaces, yahoo adapter, registry), pipeline, archive, adjustment, gaps,
+                       freshness, calendar, jobs, service, seed, registry (approved universe), probe, cli
+    api/v1/            auth, account, market routers; deps (get_current_user, get_db); schemas
+  alembic/             migrations (0001_foundation, 0002_immutable_account_fields, 0003_market_data_foundation)
+  tests/               unit/, marketdata/ (pure, no DB), integration/ (real PostgreSQL); support.py (fake provider/clock)
 ```
 
-Later phases add packages beside these (`marketdata/`, `kernel/`, `risk/`, `exchange/`, ...). Empty placeholders were not created.
+Later phases add packages beside these (`kernel/`, `risk/`, `exchange/`, ...). Empty placeholders were not created.
 
 ## Authentication
 
@@ -36,7 +40,10 @@ Later phases add packages beside these (`marketdata/`, `kernel/`, `risk/`, `exch
 3. `test_every_table_is_classified` forces every new table to be declared global, system or user-owned, so a later phase cannot add an unowned table by accident.
 4. Candles, instruments, providers and corporate actions are **global** by design (shared market data) and carry no `user_id`.
 
-Not in Phase 1: PostgreSQL row-level security (possible later hardening), per-user rate limiting.
+Not in Phase 1: PostgreSQL row-level security (possible later hardening), per-user rate limiting. Phase 2 adds one more
+item for hosted use: any authenticated user can start an ingestion job. This is an approved **local-development policy
+only**; restricting ingestion to an authorised administrator/operator is a prerequisite for hosted deployment. No role
+system is added in Phase 2.
 
 ## Raw / adjusted price separation (schema level)
 
@@ -44,10 +51,10 @@ Not in Phase 1: PostgreSQL row-level security (possible later hardening), per-us
 - `price_basis` defaults to `UNVERIFIED_PROVIDER_NATIVE`. A check constraint forbids a verified label (`AS_TRADED_VERIFIED`, `SPLIT_ADJUSTED_VERIFIED`) without a recorded `basis_verified_by`. Nothing is called "raw" or "as traded" until verified.
 - `adjusted_candles` is a separate table keyed to a candle, with method, source, factor and corporate-action-set version. It cannot modify `candles`.
 - `corporate_actions` holds splits, bonuses and dividends, with required ratio/cash fields enforced by check constraints.
-- Unique keys on `(instrument, provider, timeframe, bar_start_ts)` prevent duplicate candles and keep different providers' bars as separate rows (no silent provider switching).
+- Unique keys on `(instrument, provider, timeframe, bar_start_ts, observation_version)`, plus a partial unique index allowing one canonical version per bar, prevent duplicate candles and keep different providers' bars as separate rows (no silent provider switching). The first observation stays canonical; restated observations are additional non-canonical versions (approved Phase 2 policy).
 - Timestamps are `timestamptz` (UTC instants); `session_date` records the exchange-local trading date. `observed_at` records when Agent-X received a bar, which later phases need for the no-lookahead eligibility rules.
 
-Execution code (Phase 4) must read only `candles`, and only rows whose `price_basis` the owner has approved for execution (open decision D4).
+Execution code (Phase 4) must read only `candles`, and only rows whose `price_basis` the owner has approved for execution. The execution-price source is **deferred to Phase 4**; until then every candle is `UNVERIFIED_PROVIDER_NATIVE`, nothing relabels it, and no execution or fill code exists.
 
 ## Account baseline and immutability
 
@@ -57,11 +64,40 @@ Execution code (Phase 4) must read only `candles`, and only rows whose `price_ba
 - A future account reset must be a separate, explicitly authorised and audited operation. It is not an `UPDATE` of these columns and is not implemented.
 - Registration creates the user, the virtual account and the audit event in a single transaction; failure injection tests confirm nothing is left behind.
 
+## Phase 2: market data
+
+Full design, verified provider behaviour, archive contents and limitations are in [MARKET_DATA.md](MARKET_DATA.md).
+Summary of what changed in the foundation:
+
+- New package `app/marketdata/` (providers, pipeline, archive, adjustment, gaps, freshness, calendar, jobs, service, probe,
+  CLI). `MarketDataService` is the only downstream-facing entry point. Only `providers/yahoo.py` imports `yfinance`;
+  pandas never leaves the adapter; the package does not import any trading logic (tests enforce this).
+- Migration `0003`: provenance columns on `candles` (provider symbol, ingestion batch, source metadata), observation
+  versioning (`observation_version`, `is_canonical`, one canonical version per bar), `is_final` required, the candle
+  immutability trigger extended to the new columns, instrument registry safety rails (a futures instrument **cannot be
+  enabled**; a disabled instrument must state why; equities carry no contract fields), and new tables:
+  `instrument_provider_symbols`, `provider_capabilities`, `provider_health_state`, `data_ingestion_jobs`,
+  `data_ingestion_batches`, `data_quality_issues`, `data_restatement_events`, `exchange_calendar_days`.
+  `0001` and `0002` are unchanged. Downgrading `0003` is refused while any market data it would discard exists (candles, corporate actions, jobs, batches, quality issues, restatements, calendar entries, symbol mappings, capabilities, provider health, or instruments carrying registry fields).
+- Table classification (enforced by a test): the market-data tables are global; `data_ingestion_jobs` is a system table
+  whose nullable `requested_by_user_id` is used to show each user only their own jobs.
+- The database session timezone is pinned to UTC so every timestamp is a UTC instant in every environment. Visible
+  change for Phase 1 endpoints: timestamps such as the account's `created_at` are now always serialised as UTC with a
+  `Z` suffix (previously the offset followed the PostgreSQL server's session timezone, e.g. `+05:30`). The instant is
+  unchanged. Exchange-session calculations still use `Asia/Kolkata`.
+- Approved Phase 2 decisions (details in MARKET_DATA.md §1a): execution-price source deferred to Phase 4; first
+  observation canonical; provisional, configurable, descriptive freshness thresholds (60 s / 15 min / 3 failures);
+  inferred closures stay inferred; operator-initiated ingestion with no scheduler; local-only ingestion permission for
+  any authenticated user; near-real-time described as observed; tick-size normalisation deferred.
+- `create_app(settings, provider_registry, clock)` accepts a provider registry and clock as test hooks. Nothing
+  market-related runs on application start-up.
+
 ## What is deliberately not here
 
 - `risk_configuration` tables: no approved defaults and edit rules depend on agent state (Phase 4).
 - `futures_contract`: futures stay disabled until genuine contract-specific data exists. `InstrumentType.FUTURE` exists only so the instrument model need not change later.
-- Seeded instruments, providers or tick/lot sizes: none are invented; they arrive with Phase 2 sourcing.
+- Tick/lot sizes: none are invented. Phase 2 seeds the 10 equities and the provider, but `tick_size`/`lot_size` stay `null` until an authoritative instrument-specific source is approved.
+- A scheduler: ingestion is operator-initiated (approved for Phase 2).
 - Virtual-account balances and margin: Phase 4. Phase 1 stores `initial_capital` (required at registration, no default) and currency `INR`.
 
 ## Security posture: local MVP versus hosted deployment

@@ -13,7 +13,7 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 - **Three distinct components** sharing common infrastructure without being tightly coupled:
   1. Strategy Backtesting Engine
   2. Buy-and-Hold Benchmark Engine
-  3. Delayed Live Market Paper-Trading Engine
+  3. Delayed Live Market Paper-Trading Engine (its execution-delay model is a separate design decision; the observed Yahoo data itself is near-real-time)
 - **Backtests are advisory.** Results never automatically enable strategies or modify strategy parameters, selection or risk settings.
 - **Risk enforced at the execution boundary**, inside the Mock Exchange.
 - **User isolation.** Every user has independent accounts, positions, history and configuration.
@@ -23,8 +23,8 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Requirement validation and data research | Done (decisions recorded with the project owner) |
-| 1 | Backend foundation: FastAPI, PostgreSQL, Alembic, JWT auth, user isolation, base schema, Docker, tests | **Implemented, pending owner approval** |
-| 2 | Market-data infrastructure (Yahoo/`yfinance` adapter, archiver, validation) | Not started |
+| 1 | Backend foundation: FastAPI, PostgreSQL, Alembic, JWT auth, user isolation, base schema, Docker, tests | Approved, committed and pushed |
+| 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | **Implemented; the eight Phase 2 decisions are applied. Awaiting owner acceptance (not committed or pushed)** |
 | 3 | Indicators, regimes, strategies, selector | Not started |
 | 4 | Risk engine and Mock Exchange | Not started |
 | 5 | Agent orchestration | Not started |
@@ -34,12 +34,22 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 
 Each phase is reviewed and approved by the project owner before it is committed, tagged (`phase-N-...`) and followed by the next. Futures support stays disabled until genuine contract-specific data exists; equities come first.
 
-**What exists today:** user registration and JWT login, a per-user virtual account with an immutable initial-capital baseline, health endpoints, and the database foundation (users, accounts, audit events, and market-data tables with raw/adjusted price separation). There is no market-data ingestion, strategy, risk, exchange, agent, backtesting or LLM functionality yet.
+**What exists today:** user registration and JWT login, a per-user virtual account with an immutable initial-capital baseline, health endpoints, and a market-data foundation: 10 NSE equities registered (NIFTY/BANKNIFTY futures are disabled placeholders), a Yahoo Finance adapter, a validated PostgreSQL archive of 5-minute candles with provenance, restatement tracking, raw/adjusted separation, coverage and freshness reporting, ingestion jobs and authenticated market-data APIs. The first 60-day backfill was collected and its actual coverage is documented in [docs/MARKET_DATA.md](docs/MARKET_DATA.md). There is no strategy, risk, exchange, agent, backtesting or LLM functionality yet.
+
+**Market data in brief** (details and evidence in [docs/MARKET_DATA.md](docs/MARKET_DATA.md)):
+
+- Yahoo Finance is the approved MVP provider. Its data is accepted as delivered, with its limitations detected and documented, never relabelled.
+- In testing, Yahoo's 5-minute data was **near-real-time**: the latest row is the bar still forming. No fixed delay is assumed or guaranteed. Only *finalised* bars (ended at least 60 s ago, provisional) are archived.
+- Prices are provider-native and labelled `UNVERIFIED_PROVIDER_NATIVE`: Yahoo's `Close` is split-adjusted even unadjusted. Which prices may feed simulated fills is decided in Phase 4.
+- The first observation of a bar stays canonical; later differing observations are kept as separate versions.
+- Holidays are not authoritatively known: closures are *inferred* and labelled so; other absences stay unexplained.
+- Ingestion is operator-initiated (CLI or API); nothing runs on start-up and there is no scheduler. Any authenticated user may trigger it locally; this must be restricted to an operator before hosted deployment.
+- Provider precision is kept; prices are not normalised to tick sizes. Futures are disabled.
 
 ## Tech stack
 
-Python 3.14 · FastAPI · PostgreSQL 18 · SQLAlchemy 2 · Alembic · psycopg 3 · argon2id · PyJWT · pytest · Docker Compose.
-Planned: `yfinance` (initial delayed data), pandas/NumPy, LangGraph, APScheduler.
+Python 3.14 · FastAPI · PostgreSQL 18 · SQLAlchemy 2 · Alembic · psycopg 3 · argon2id · PyJWT · pandas · NumPy · `yfinance` · pytest · Docker Compose.
+Planned: LangGraph. Scheduling (e.g. APScheduler) is not used; it may be reconsidered in a later phase.
 
 ## Quick start
 
@@ -61,6 +71,7 @@ Interactive API docs: `http://localhost:8000/docs`. Full instructions, including
 
 - [docs/SETUP.md](docs/SETUP.md): environment, configuration, running, testing, migrations
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): structure, authentication, isolation, raw/adjusted price separation
+- [docs/MARKET_DATA.md](docs/MARKET_DATA.md): Phase 2 market-data design, verified Yahoo behaviour, archive contents, limitations, operations
 - [docs/API.md](docs/API.md): endpoints
 
 ## Repository layout
