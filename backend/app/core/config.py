@@ -54,23 +54,38 @@ class Settings(BaseSettings):
     # Fail-closed defaults: no source, no approved basis, no approved provider. With these
     # defaults the Mock Exchange cannot fill any order. Enabling fills is an explicit owner
     # decision recorded in configuration, never a code default.
-    execution_price_source: Literal["disabled", "candle_close"] = "disabled"
+    # "next_bar_open": orders fill at the open of the first finalized bar that starts at or after the order was
+    # accepted (never at the close of the bar a decision was based on). See docs/PHASE4.md.
+    execution_price_source: Literal["disabled", "next_bar_open"] = "disabled"
     execution_approved_price_bases: list[PriceBasis] = Field(default_factory=list)
     execution_approved_providers: list[str] = Field(default_factory=list)
     execution_candle_timeframe: Timeframe = Timeframe.M5  # canonical timeframe per the PRD
-    # PROVISIONAL (PRD section 7.4: 15-minute stale threshold). Configurable, not a final rule.
+    # PROVISIONAL (PRD section 7.4: 15-minute stale threshold). Applies to the reference price used for
+    # decisions, sizing and marks. Configurable, not a final rule.
     execution_max_price_age_seconds: int = Field(default=900, gt=0)
 
-    # ---- Phase 4: simulated execution costs -------------------------------------------
-    # No defaults: fee and slippage assumptions are owner decisions. While any is unset the
-    # exchange rejects orders with COSTS_NOT_CONFIGURED instead of assuming zero cost.
-    exchange_fee_fixed_per_order: Decimal | None = Field(default=None, ge=0)
-    exchange_fee_buy_bps: Decimal | None = Field(default=None, ge=0, le=10000)
-    exchange_fee_sell_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    # ---- Phase 4: simulated execution costs (Indian equities; see app/exchange/costs.py) ----
+    # No defaults: every rate is an owner decision (it depends on product, broker and date). While any is
+    # unset the exchange rejects orders with COSTS_NOT_CONFIGURED instead of assuming zero cost.
+    exchange_brokerage_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_brokerage_max_per_order: Decimal | None = Field(default=None, ge=0)
+    exchange_stt_buy_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_stt_sell_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_txn_charge_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_sebi_fee_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_stamp_duty_buy_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_gst_pct: Decimal | None = Field(default=None, ge=0, le=100)
     exchange_slippage_bps: Decimal | None = Field(default=None, ge=0, le=10000)
-    # Optional liquidity cap: fraction of the observation's volume one fill may take. Unset
-    # means no cap (full fills). Setting it enables partial fills.
+    # Optional liquidity cap: fraction of a bar's volume one fill may take. Unset means no cap (full fills).
+    # Setting it enables partial fills.
     exchange_max_volume_participation: Decimal | None = Field(default=None, gt=0, le=1)
+
+    @field_validator("execution_candle_timeframe")
+    @classmethod
+    def _intraday_execution_timeframe(cls, v: Timeframe) -> Timeframe:
+        if v is Timeframe.D1:
+            raise ValueError("EXECUTION_CANDLE_TIMEFRAME must be an intraday timeframe")
+        return v
 
     @field_validator("execution_approved_price_bases")
     @classmethod
