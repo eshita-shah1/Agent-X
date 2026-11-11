@@ -1,9 +1,13 @@
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+
+from app.db.enums import PriceBasis, Timeframe
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -45,6 +49,35 @@ class Settings(BaseSettings):
     marketdata_incremental_overlap_hours: int = Field(default=24, ge=0)
     marketdata_job_heartbeat_timeout_seconds: int = Field(default=300, gt=0)
     marketdata_request_pause_seconds: float = Field(default=1.5, ge=0)
+
+    # ---- Phase 4: execution price gate (open decision D4) --------------------------------
+    # Fail-closed defaults: no source, no approved basis, no approved provider. With these
+    # defaults the Mock Exchange cannot fill any order. Enabling fills is an explicit owner
+    # decision recorded in configuration, never a code default.
+    execution_price_source: Literal["disabled", "candle_close"] = "disabled"
+    execution_approved_price_bases: list[PriceBasis] = Field(default_factory=list)
+    execution_approved_providers: list[str] = Field(default_factory=list)
+    execution_candle_timeframe: Timeframe = Timeframe.M5  # canonical timeframe per the PRD
+    # PROVISIONAL (PRD section 7.4: 15-minute stale threshold). Configurable, not a final rule.
+    execution_max_price_age_seconds: int = Field(default=900, gt=0)
+
+    # ---- Phase 4: simulated execution costs -------------------------------------------
+    # No defaults: fee and slippage assumptions are owner decisions. While any is unset the
+    # exchange rejects orders with COSTS_NOT_CONFIGURED instead of assuming zero cost.
+    exchange_fee_fixed_per_order: Decimal | None = Field(default=None, ge=0)
+    exchange_fee_buy_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_fee_sell_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    exchange_slippage_bps: Decimal | None = Field(default=None, ge=0, le=10000)
+    # Optional liquidity cap: fraction of the observation's volume one fill may take. Unset
+    # means no cap (full fills). Setting it enables partial fills.
+    exchange_max_volume_participation: Decimal | None = Field(default=None, gt=0, le=1)
+
+    @field_validator("execution_approved_price_bases")
+    @classmethod
+    def _unverified_basis_is_never_executable(cls, v: list[PriceBasis]) -> list[PriceBasis]:
+        if PriceBasis.UNVERIFIED_PROVIDER_NATIVE in v:
+            raise ValueError("UNVERIFIED_PROVIDER_NATIVE can never be approved for execution")
+        return v
 
     @field_validator("jwt_secret_key")
     @classmethod
