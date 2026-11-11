@@ -145,7 +145,7 @@ Tests check the following:
 - truncating the data at a session boundary leaves earlier sessions unchanged;
 - a run persisted through the API reproduces an independent engine run exactly.
 
-## 7. Runs, jobs and persistence (migration 0004)
+## 7. Runs, jobs and persistence (migration 0009)
 
 - **Starting a run.** `POST /api/v1/backtests` performs every refusal check synchronously, stores the run as `QUEUED` and hands it to FastAPI `BackgroundTasks`. There is no scheduler, and nothing runs on start-up.
 - **One active run per user** (`QUEUED`/`RUNNING`), enforced by a partial unique index; other users are unaffected. A run whose heartbeat is older than `BACKTEST_JOB_HEARTBEAT_TIMEOUT_SECONDS` (default 600) is marked `INTERRUPTED` when its owner next starts a run.
@@ -173,7 +173,8 @@ Tests check the following:
   - Its status only moves `QUEUED → RUNNING → SUCCEEDED/FAILED/INTERRUPTED` (or `QUEUED → FAILED/INTERRUPTED`), and a finished run never changes.
   - Fingerprints and summary are written only by the transition to `SUCCEEDED`; a check constraint requires the fingerprints exactly when `SUCCEEDED`.
   - Result rows can be inserted only while their run is `RUNNING` and has the same owner, and are never updated or deleted.
-- **Downgrade.** Downgrading `0004` is refused while any run exists.
+- **Migration number.** The migration was written as `0004` and renumbered to **`0009`** (parent `0008`) when Phase 3 was integrated with Phase 4, whose migrations `0004`-`0008` were already on `main`. The schema is unchanged.
+- **Downgrade.** Downgrading `0009` is refused while any run exists.
 
 ## 8. Limitations (read before interpreting any result)
 
@@ -185,7 +186,32 @@ Tests check the following:
   - no partial fills, queueing, market impact or circuit limits;
   - no tick-size normalisation.
 
-  It is backtest-only and is **not** the Mock Exchange.
+  It is backtest-only and is **not** the Phase 4 Mock Exchange (see section 9).
 - Costs default to zero (`GROSS_OF_COSTS`). Modelled costs are user assumptions.
 - Results are per instrument, not a portfolio; do not sum them.
 - Corporate-action records come from the provider and may be incomplete.
+
+## 9. Relationship to Phase 4 execution (open decision)
+
+The Phase 3 backtest and the Phase 4 risk engine / Mock Exchange were developed in parallel and integrated afterwards.
+They are deliberately **separate**:
+- The backtest never imports or calls the risk engine, the Mock Exchange, the order pipeline or the operations code.
+- It never places orders and never writes orders, fills, ledger entries or positions.
+- Phase 4 never reads backtest results.
+
+Tests enforce this (`tests/backtest/test_phase_separation.py`, and an integration test asserting that a complete run
+leaves every Phase 4 table empty).
+
+Their simulation assumptions currently **differ**. Backtest results are therefore not expected to match Phase 4
+simulated fills for the same signals:
+
+| Aspect | Phase 3 backtest (approved Phase 3 decisions) | Phase 4 Mock Exchange ([PHASE4.md](PHASE4.md), [D4_EXECUTION_READINESS.md](D4_EXECUTION_READINESS.md)) |
+|---|---|---|
+| Entries and strategy exits | Next bar's open (`NEXT_BAR_OPEN_V1`) | Open of the first finalized bar at or after acceptance |
+| Protective stop / target | Intrabar at the stop or target level (stop first; gap-through at the open) | Detected on a bar, exited by a market order at the next bar's open |
+| Costs | Generic `CostModel`, all zero by default (`GROSS_OF_COSTS`) | Operator-maintained, effective-dated Indian-equity component schedule |
+| Session | Intraday: mandatory 15:15 square-off, no overnight positions | `DELIVERY` product only; intraday square-off not modelled |
+
+Phase 4's documentation states that backtesting "must use `app.exchange.costs.CostModel` and the same next-bar-open
+semantics". That has **not** been applied, because it would change approved Phase 3 decisions. Whether, and how,
+to align the two models is an open owner decision.

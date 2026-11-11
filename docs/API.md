@@ -1,4 +1,4 @@
-# Agent-X Backend — API (Phases 1-3)
+# Agent-X Backend — API (Phases 1-4)
 
 Base path `/api/v1`. Interactive docs at `/docs` (OpenAPI at `/openapi.json`).
 Authenticated endpoints need `Authorization: Bearer <access_token>`.

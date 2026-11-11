@@ -1,4 +1,4 @@
-# Agent-X Backend — Setup (Phases 1-3)
+# Agent-X Backend — Setup (Phases 1-4)
 
 Paper trading only. No real-money execution exists in this codebase.
 
@@ -73,7 +73,7 @@ cd backend
 ```
 
 Test layout: `tests/indicators`, `tests/strategies` (including `selection/`) and `tests/backtest` are pure and fast
-(`pytest tests/backtest -q`); `tests/integration/test_backtest_*.py` cover migration 0004, the runner, the API, user
+(`pytest tests/backtest -q`); `tests/integration/test_backtest_*.py` cover migration 0009, the runner, the API, user
 isolation and reproducibility against the test database.
 
 Integration tests run against the real `agentx_test` PostgreSQL (the immutability triggers, check constraints and `timestamptz` behaviour cannot be exercised on SQLite); each starts from truncated tables. Pure unit tests (`tests/unit`, `tests/marketdata`) never touch the database. **The suite never touches the network or the real `yfinance`**: Yahoo is replaced by a deterministic fake provider. Do not run the opt-in probe or the ingestion CLI against `agentx_test`.
@@ -106,7 +106,7 @@ contact a provider, so run a backfill first. One run per user may be active at a
 
 ```powershell
 cd backend
-..\.venv\Scripts\python.exe -m alembic upgrade head                      # includes 0004_backtest_runs_and_results
+..\.venv\Scripts\python.exe -m alembic upgrade head                      # through 0009_backtest_runs_and_results (single head)
 ```
 
 Back up a database that holds data before migrating it, for example

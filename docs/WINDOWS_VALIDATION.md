@@ -33,7 +33,7 @@ psql -U postgres -c "CREATE DATABASE agentx_wincheck OWNER agentx_app;"
 $env:DB_NAME="agentx_wincheck"; ..\.venv\Scripts\python.exe -m alembic upgrade head
 ..\.venv\Scripts\python.exe -m alembic downgrade base
 ..\.venv\Scripts\python.exe -m alembic upgrade head
-..\.venv\Scripts\python.exe -m alembic current     # expect: 0008 (head)
+..\.venv\Scripts\python.exe -m alembic current     # expect: 0009 (head)
 ..\.venv\Scripts\python.exe -m alembic check       # expect: No new upgrade operations detected.
 Remove-Item Env:DB_NAME
 psql -U postgres -c "DROP DATABASE agentx_wincheck;"
@@ -54,7 +54,7 @@ Invoke-RestMethod http://localhost:8010/health/ready    # {"status":"ready"}
 cd ..
 docker compose build api
 docker compose run --rm migrate
-docker compose run --rm migrate alembic current          # expect: 0008 (head)
+docker compose run --rm migrate alembic current          # expect: 0009 (head)
 docker compose up -d api
 Invoke-RestMethod "http://localhost:$((Get-Content .env | Select-String '^API_PORT=').ToString().Split('=')[1])/health/ready"
 docker compose down

@@ -1,10 +1,11 @@
-# Agent-X Backend — Architecture (Phases 1-3)
+# Agent-X Backend — Architecture (Phases 1-4)
 
 Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 is the foundation (auth,
 isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)); Phase 3 adds
 indicators, strategies, regime-based selection, the backtesting engine and the Buy-and-Hold benchmark (see
-[BACKTESTING.md](BACKTESTING.md)). The Risk Engine, the Mock Exchange, live paper trading, the agent and LLM features
-are **not implemented**.
+[BACKTESTING.md](BACKTESTING.md)); Phase 4 adds the risk engine, the Mock Exchange, simulation-only execution, cost
+schedules, corporate-action adjustments, dividends and the operator role (see [PHASE4.md](PHASE4.md)). The agent, live
+trading, broker integration and LLM features are **not implemented**.
 
 ## Layout
 
@@ -26,14 +27,14 @@ backend/
     strategies/        five long-only strategies, configs, registry; selection/ (regime, candidates, session lock)
     backtest/          pure backtesting engine: fills, costs, accounting, benchmark, fingerprints (no DB)
     backtest_runs/     read-only data loader, background runs, atomic persistence
-    api/v1/            auth, account, market, backtests routers; deps (get_current_user, get_db); schemas
-  alembic/             migrations 0001_foundation, 0002_immutable_account_fields, 0003_market_data_foundation,
-                       0004_backtest_runs_and_results
+    exchange/, risk/, orders/, ops/   Phase 4 (see below)
+    api/v1/            auth, account, market, trading, operator, backtests routers; deps; schemas
+  alembic/             migrations 0001-0009 (see "Migration chain")
   tests/               unit/, marketdata/, indicators/, strategies/, backtest/ (pure, no DB),
                        integration/ (real PostgreSQL); support.py (fake provider/clock)
 ```
 
-Later phases add packages beside these (`kernel/`, `risk/`, `exchange/`, ...). Empty placeholders were not created.
+Later phases add packages beside these. Empty placeholders were not created.
 
 Phase 4 added (details in [PHASE4.md](PHASE4.md)):
 
@@ -117,6 +118,28 @@ Summary of what changed in the foundation:
 - `create_app(settings, provider_registry, clock)` accepts a provider registry and clock as test hooks. Nothing
   market-related runs on application start-up.
 
+## Migration chain
+
+One linear chain with a single head (`alembic heads` → `0009`):
+
+| Revision | Purpose | Phase |
+|---|---|---|
+| `0001` | Foundation | 1 |
+| `0002` | Immutable account fields | 1 |
+| `0003` | Market-data foundation | 2 |
+| `0004` | Risk engine and Mock Exchange | 4 |
+| `0005` | Next-bar execution, component fees, risk refresh | 4 |
+| `0006` | Simulation-only execution policy | 4 |
+| `0007` | Corporate-action adjustments, cost schedule fields, order product | 4 |
+| `0008` | Operator role, dividend credits, cash-in-lieu provenance | 4 |
+| `0009` | Backtest runs and results | 3 |
+
+Phases 3 and 4 were developed in parallel, and Phase 4 reached `main` first. The Phase 3 migration was written as `0004`
+and renumbered to `0009` (parent `0008`) at integration. Its schema is unchanged, and `0001`-`0008` are unchanged.
+
+A database stamped `0004` by the pre-integration Phase 3 branch holds the backtest schema, not Phase 4's. It must not be
+upgraded in place: restore a pre-`0004` backup and migrate to head.
+
 ## Phase 3: strategies and backtesting
 
 Full design and limitations: [BACKTESTING.md](BACKTESTING.md).
@@ -128,7 +151,7 @@ Full design and limitations: [BACKTESTING.md](BACKTESTING.md).
   - the engine imports no database, API, account, clock or randomness;
   - neither the engine nor the runner contains order, exchange, provider, scheduler or LLM code.
 - **No feedback.** Selection takes no outcome metric as input, and nothing writes backtest results back into configuration or selection (D15).
-- **Migration `0004` (additive; `0001`-`0003` unchanged).** Six user-owned tables, each carrying a `user_id` FK to `users`:
+- **Migration `0009` (additive).** Six user-owned tables, each carrying a `user_id` FK to `users`:
 
   | Table | Holds |
   |---|---|
@@ -144,10 +167,11 @@ Full design and limitations: [BACKTESTING.md](BACKTESTING.md).
   - A partial unique index allows one `QUEUED`/`RUNNING` run per user.
   - Money columns are unconstrained `NUMERIC` (exact).
   - Three trigger functions back 11 triggers, enforcing immutability. A run's request, configuration, labels, fingerprint and owner never change; its status only moves forward, a finished run is frozen, and runs are never deleted. Result rows are inserted only while their run is `RUNNING` and has the same owner, and are never updated or deleted. A check constraint ties the fingerprints to `SUCCEEDED`.
-  - Downgrading `0004` is refused while any run exists.
+  - Downgrading `0009` is refused while any run exists.
 - **Table classification.** The six tables are user-owned (`test_every_table_is_classified`). API queries go through `owned_select`, and another user's run is `404`.
 - **Accounts are read only.** A backtest reads the account's `initial_capital` as its default capital and never writes to the account.
 - **Time zones.** The engine normalises every bar timestamp to UTC and serialises explanations in UTC. Session logic stays in Asia/Kolkata. Results are therefore identical whatever zone the inputs, or the database session, used.
+- **Separate from Phase 4 execution.** No Phase 3 module imports the risk engine, Mock Exchange, order pipeline or operations code, and no Phase 4 execution module imports the backtest. A backtest never writes orders, fills, ledger entries or positions, and runs with execution disabled. The two simulation models differ, and aligning them is an open decision ([BACKTESTING.md](BACKTESTING.md) §9).
 
 ## What is deliberately not here
 

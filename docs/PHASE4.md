@@ -33,8 +33,9 @@ Review findings and their resolution:
 |---|---|
 | 4 | Risk engine and Mock Exchange |
 
-Built on Phase 1 and Phase 2. Phase 3 (indicators, strategies, selector) does not exist yet, so
-Phase 4 accepts generic **order intents** instead of strategy signals.
+Built on Phase 1 and Phase 2. Phase 3 (indicators, strategies, selector) did not exist when Phase 4 was built, so
+Phase 4 accepts generic **order intents** instead of strategy signals. (Phase 3 was integrated afterwards; its backtest
+is separate from this execution path, and its migration became `0009`. See [ARCHITECTURE.md](ARCHITECTURE.md).)
 
 Not in Phase 4 (later phases): LangGraph orchestration and the autonomous loop, scheduling,
 `monitor` / pause mode, `manual_modify` rules beyond manual orders and cancels, the lifetime
@@ -227,7 +228,9 @@ packages and execution code in `app/marketdata` stay forbidden).
 - On every cycle, call `ctx.exchange.process_open_orders(account)`, then `ctx.risk.refresh(account)` and
   `OrderService.run_protective_exits(user_id)`. Call `refresh` at session start. Phase 4 schedules nothing.
 - Backtesting (Phase 6) must use `app.exchange.costs.CostModel` and the same next-bar-open semantics, so that
-  paper trading and backtests agree.
+  paper trading and backtests agree. *Integration note:* the Phase 3 backtest (which absorbed Phase 6) was built in
+  parallel with its own approved cost and fill model and does **not** do this yet. The differences and the open
+  decision are in [BACKTESTING.md](BACKTESTING.md) §9.
 
 ### Exact signatures (as implemented)
 
