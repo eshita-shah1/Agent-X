@@ -6,15 +6,12 @@ from decimal import Decimal
 import pytest
 
 from app.db.enums import OrderSide, OrderType, RiskOutcome
-from app.exchange.costs import CostModel
+from tests.cost_fixtures import fixture_costs
 from app.risk.engine import AccountRiskSnapshot, TradeProposal, UserRiskLimits, evaluate
 
 D = Decimal
-# SYNTHETIC rates (see test_costs_and_accounting); worst-case buy cost per share at 100.05 is 100.2334917.
-COSTS = CostModel(
-    brokerage_bps=D("10"), brokerage_max_per_order=D("20"), stt_buy_bps=D("0"), stt_sell_bps=D("25"),
-    txn_charge_bps=D("3"), sebi_fee_bps=D("0"), stamp_duty_buy_bps=D("3"), gst_pct=D("18"), slippage_bps=D("5"),
-)
+# SYNTHETIC rates (tests/fixtures/cost_schedule_synthetic.json); worst-case buy cost per share at 100.05 is 100.2334917.
+COSTS = fixture_costs()
 LIMITS = UserRiskLimits(
     max_risk_per_trade_pct=D("1"),
     max_position_allocation_pct=D("20"),

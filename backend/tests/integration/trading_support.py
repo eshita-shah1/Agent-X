@@ -15,6 +15,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from tests.cost_fixtures import FIXTURE_SCHEDULE_PATH
 from sqlalchemy import select
 
 from app.db.enums import (
@@ -50,18 +51,9 @@ FIXTURE_EVIDENCE = "test-fixture: synthetic data, not a provider verification"
 _ids = itertools.count(1)
 
 
-# SYNTHETIC cost rates chosen for easy hand calculation. They are not real NSE/broker charges.
-FIXTURE_COSTS = dict(
-    exchange_brokerage_bps=D("10"),
-    exchange_brokerage_max_per_order=D("20"),
-    exchange_stt_buy_bps=D("0"),
-    exchange_stt_sell_bps=D("25"),
-    exchange_txn_charge_bps=D("3"),
-    exchange_sebi_fee_bps=D("0"),
-    exchange_stamp_duty_buy_bps=D("3"),
-    exchange_gst_pct=D("18"),
-    exchange_slippage_bps=D("5"),
-)
+# SYNTHETIC cost schedule chosen for easy hand calculation (tests/fixtures/cost_schedule_synthetic.json). It is not
+# real NSE/SEBI/tax/broker data.
+FIXTURE_COSTS = dict(exchange_cost_schedule_path=str(FIXTURE_SCHEDULE_PATH))
 
 
 class Clock:
@@ -73,10 +65,24 @@ class Clock:
 
 
 def enabled_settings(base: Settings, **over) -> Settings:
-    """Settings with execution explicitly enabled against the fixture provider."""
+    """Verified mode against the fixture provider (fixture bars labelled AS_TRADED_VERIFIED by `make_candle`)."""
     values = dict(
-        execution_price_source="next_bar_open",
+        execution_mode="verified_next_bar_open",
+        execution_approval_reference="TEST-FIXTURE-APPROVAL",
         execution_approved_price_bases=[PriceBasis.AS_TRADED_VERIFIED],
+        execution_approved_providers=[FIXTURE_PROVIDER],
+        **FIXTURE_COSTS,
+    )
+    values.update(over)
+    return base.model_copy(update=values)
+
+
+def simulation_settings(base: Settings, **over) -> Settings:
+    """Simulation-only mode: accepts only UNVERIFIED_PROVIDER_NATIVE bars (as Yahoo data is archived)."""
+    values = dict(
+        execution_mode="simulation_provider_native",
+        execution_approval_reference="TEST-FIXTURE-SIMULATION-APPROVAL",
+        execution_approved_price_bases=[],
         execution_approved_providers=[FIXTURE_PROVIDER],
         **FIXTURE_COSTS,
     )
@@ -224,10 +230,10 @@ def submit(db: Session, settings: Settings, clock, account: VirtualAccount, orde
 
 def next_bar(
     db: Session, provider: DataProvider, instrument: Instrument, clock: Clock, open: str, close: str | None = None,
-    *, high: str | None = None, low: str | None = None, volume: int = 100_000, version: int = 1,
+    *, high: str | None = None, low: str | None = None, volume: int = 100_000, version: int = 1, verified: bool = True,
 ) -> Candle:
-    """Archive the next 5-minute bar starting at or after `clock.now` (aligned to 5 minutes), finalized and
-    observed 30 s after its end, and move the clock 1 minute past its end."""
+    """Archive the next 5-minute bar starting at or after `clock.now` (aligned to 5 minutes), observed at its end,
+    and move the clock to its end, so consecutive calls produce a contiguous archive (as a real one is)."""
     minute = (clock.now.minute // 5) * 5
     start = clock.now.replace(minute=minute, second=0, microsecond=0)
     if start < clock.now:
@@ -235,9 +241,9 @@ def next_bar(
     end = start + timedelta(minutes=5)
     candle = make_candle(
         db, provider, instrument, close or open, end=end, open=open, high=high, low=low, volume=volume,
-        version=version,
+        version=version, verified=verified, observed_delay=timedelta(0),
     )
-    clock.now = end + timedelta(minutes=1)
+    clock.now = end
     return candle
 
 

@@ -114,8 +114,8 @@ def test_exchange_status_reports_fills_blocked_by_default(client, make_user):
     _, h = make_user()
     body = client.get("/api/v1/exchange/status", headers=h).json()
     assert body["execution_enabled"] is False
-    assert body["execution_price_source"] == "disabled"
-    assert any(r.startswith("SOURCE_DISABLED") for r in body["blocking_reasons"])
+    assert body["execution_mode"] == "disabled" and body["execution_policy"] is None
+    assert any(r.startswith("EXECUTION_DISABLED") for r in body["blocking_reasons"])
     assert any(r.startswith("COSTS_NOT_CONFIGURED") for r in body["blocking_reasons"])
 
 
@@ -341,7 +341,7 @@ def test_risk_state_refreshes_without_an_order(live, market, db):
     assert Decimal(state["equity"]) == Decimal("98997.665083") + Decimal("500")
     assert Decimal(state["daily_loss_pct"]) > Decimal("0.4")
     assert any(b.startswith("DAILY_LOSS_LIMIT_BREACHED") for b in state["breaches"])
-    assert state["last_equity_at"].startswith("2026-01-05T05:10:00")
+    assert state["last_equity_at"].startswith("2026-01-05T05:09:00")  # clock: bar end 05:05 + 4 min
 
 
 def test_exchange_status_names_the_execution_model_and_missing_cost_settings(client, make_user):
@@ -349,4 +349,4 @@ def test_exchange_status_names_the_execution_model_and_missing_cost_settings(cli
     body = client.get("/api/v1/exchange/status", headers=h).json()
     assert body["execution_model"].startswith("NEXT_BAR_OPEN")
     missing = next(r for r in body["blocking_reasons"] if r.startswith("COSTS_NOT_CONFIGURED"))
-    assert "EXCHANGE_GST_PCT" in missing and "EXCHANGE_BROKERAGE_BPS" in missing
+    assert "EXCHANGE_COST_SCHEDULE_PATH" in missing
