@@ -137,6 +137,7 @@ def evaluate(
     costs: CostModel | None,
     price_ok: bool,
     price_detail: str,
+    costs_detail: str | None = None,
 ) -> RiskResult:
     checks: list[RiskCheck] = []
 
@@ -149,7 +150,7 @@ def evaluate(
         return reject(RiskReason.NO_ELIGIBLE_PRICE, price_detail)
     checks.append(RiskCheck("price_eligible", True, price_detail))
     if costs is None:
-        return reject(RiskReason.COSTS_NOT_CONFIGURED, "fee and slippage assumptions are not configured")
+        return reject(RiskReason.COSTS_NOT_CONFIGURED, costs_detail or "transaction cost rates are not configured")
 
     if proposal.side is OrderSide.SELL:
         if proposal.quantity > snapshot.sellable_quantity:
