@@ -10,10 +10,15 @@ from app.exchange.accounting import AccountingError, PositionState, apply_buy, a
 from app.exchange.costs import CostModel
 
 D = Decimal
-COSTS = CostModel(fee_fixed_per_order=D("20"), fee_buy_bps=D("10"), fee_sell_bps=D("30"), slippage_bps=D("5"))
+# SYNTHETIC rates chosen for hand calculation, not real NSE/broker charges.
+COSTS = CostModel(
+    brokerage_bps=D("10"), brokerage_max_per_order=D("20"), stt_buy_bps=D("0"), stt_sell_bps=D("25"),
+    txn_charge_bps=D("3"), sebi_fee_bps=D("0"), stamp_duty_buy_bps=D("3"), gst_pct=D("18"), slippage_bps=D("5"),
+)
+ZERO = CostModel(*(D(0),) * 9)
 
 
-# ---- slippage / fees -----------------------------------------------------------------------
+# ---- slippage -----------------------------------------------------------------------------------
 
 
 def test_slippage_is_adverse_for_both_sides():
@@ -22,28 +27,79 @@ def test_slippage_is_adverse_for_both_sides():
 
 
 def test_slipped_prices_round_against_the_trader():
-    c = CostModel(D(0), D(0), D(0), slippage_bps=D("3"))
+    from dataclasses import replace
+
+    c = replace(ZERO, slippage_bps=D("3"))
     # 123.4567 * 1.0003 = 123.49373701 -> BUY rounds up, SELL rounds down at 6 dp
     assert c.slipped_price(OrderSide.BUY, D("123.4567")) == D("123.493738")
     assert c.slipped_price(OrderSide.SELL, D("123.4567")) == D("123.419662")
 
 
-def test_fees_are_exact_side_specific_and_fixed_fee_is_optional():
-    assert COSTS.fee(OrderSide.BUY, D("1000.5"), include_fixed=True) == D("21.000500")
-    assert COSTS.fee(OrderSide.SELL, D("1099.45"), include_fixed=True) == D("23.298350")
-    assert COSTS.fee(OrderSide.BUY, D("1000.5"), include_fixed=False) == D("1.000500")
+# ---- component fees ------------------------------------------------------------------------------
 
 
-def test_fee_rounds_up_sub_micro_amounts():
-    c = CostModel(D(0), D("1"), D("1"), D(0))
-    assert c.fee(OrderSide.BUY, D("0.01"), include_fixed=False) == D("0.000001")  # 0.000001 exactly
-    assert c.fee(OrderSide.BUY, D("0.011"), include_fixed=False) == D("0.000002")  # 0.0000011 -> up
+def test_buy_fee_components():
+    f = COSTS.fees(OrderSide.BUY, D("1000.5"))
+    assert f.brokerage == D("1.000500")  # 10 bps, below the 20 cap
+    assert f.stt == D("0")  # buy-side STT set to 0 in this fixture
+    assert f.txn_charge == D("0.300150")
+    assert f.sebi_fee == D("0")
+    assert f.stamp_duty == D("0.300150")  # buy side only
+    assert f.gst == D("0.234117")  # 18 % of (brokerage + txn + sebi) = 0.234117
+    assert f.total == D("1.834917")
+
+
+def test_sell_fee_components_have_stt_and_no_stamp_duty():
+    f = COSTS.fees(OrderSide.SELL, D("1099.45"))
+    assert (f.brokerage, f.stt, f.txn_charge, f.stamp_duty) == (D("1.099450"), D("2.748625"), D("0.329835"), D("0"))
+    assert f.gst == D("0.257272")  # 0.2572713 rounded up
+    assert f.total == D("4.435182")
+
+
+def test_brokerage_is_capped_per_order_across_partial_fills():
+    big = D("50000")  # 10 bps = 50 > cap 20
+    assert COSTS.fees(OrderSide.BUY, big).brokerage == D("20")
+    assert COSTS.fees(OrderSide.BUY, big, brokerage_already_charged=D("15")).brokerage == D("5")
+    assert COSTS.fees(OrderSide.BUY, big, brokerage_already_charged=D("20")).brokerage == D("0")
+    assert COSTS.fees(OrderSide.BUY, big, brokerage_already_charged=D("25")).brokerage == D("0")
+
+
+def test_each_component_rounds_up_at_six_decimals():
+    from dataclasses import replace
+
+    c = replace(ZERO, txn_charge_bps=D("1"))
+    assert c.fees(OrderSide.BUY, D("0.011")).txn_charge == D("0.000002")  # 0.0000011 -> up
+
+
+def test_fee_breakdown_serialises_with_total():
+    d = COSTS.fees(OrderSide.BUY, D("1000.5")).as_dict()
+    assert d["total"] == "1.834917" and set(d) == {"brokerage", "stt", "txn_charge", "sebi_fee", "stamp_duty", "gst", "total"}
 
 
 def test_zero_cost_model_is_allowed_only_when_explicit():
-    zero = CostModel(D(0), D(0), D(0), D(0))
-    assert zero.slipped_price(OrderSide.BUY, D("100")) == D("100")
-    assert zero.fee(OrderSide.SELL, D("500"), include_fixed=True) == D("0")
+    assert ZERO.slipped_price(OrderSide.BUY, D("100")) == D("100")
+    assert ZERO.fee(OrderSide.SELL, D("500")) == D("0")
+
+
+@pytest.mark.parametrize("cash", ["50", "1002.335417", "1002.33", "1021", "5000", "100000", "1234567.89"])
+@pytest.mark.parametrize("price", ["100.05", "99", "2500.123456"])
+def test_max_buy_quantity_is_affordable_and_maximal_enough(price, cash):
+    p, c = D(price), D(cash)
+    q = COSTS.max_buy_quantity(p, c)
+    if q:
+        turnover = (p * q).quantize(D("0.000001"))
+        assert turnover + COSTS.fee(OrderSide.BUY, turnover) <= c  # never unaffordable
+    # and it is not far from the true maximum (the bound is conservative by at most one share here)
+    q2 = q + 2
+    turnover2 = (p * q2).quantize(D("0.000001"))
+    assert turnover2 + COSTS.fee(OrderSide.BUY, turnover2) > c
+
+
+def test_buy_cost_per_share_upper_bounds_the_real_cost():
+    per_share = COSTS.buy_cost_per_share_upper(D("100.05"))
+    for q in (1, 10, 1000, 100000):
+        turnover = D("100.05") * q
+        assert turnover + COSTS.fee(OrderSide.BUY, turnover) <= per_share * q + D("0.00001")
 
 
 def _settings(**over) -> Settings:
@@ -54,16 +110,22 @@ def _settings(**over) -> Settings:
     return Settings(**{**base, **over})
 
 
-def test_cost_model_is_none_until_every_value_is_configured():
+_ALL_COSTS = dict(
+    exchange_brokerage_bps="10", exchange_brokerage_max_per_order="20", exchange_stt_buy_bps="0",
+    exchange_stt_sell_bps="25", exchange_txn_charge_bps="3", exchange_sebi_fee_bps="0",
+    exchange_stamp_duty_buy_bps="3", exchange_gst_pct="18", exchange_slippage_bps="5",
+)
+
+
+def test_cost_model_is_none_until_every_rate_is_configured():
     assert CostModel.from_settings(_settings()) is None
-    assert CostModel.from_settings(_settings(exchange_fee_fixed_per_order="0", exchange_fee_buy_bps="1")) is None
-    full = CostModel.from_settings(
-        _settings(
-            exchange_fee_fixed_per_order="20", exchange_fee_buy_bps="1", exchange_fee_sell_bps="2",
-            exchange_slippage_bps="3",
-        )
-    )
-    assert full == CostModel(D("20"), D("1"), D("2"), D("3"), None)
+    assert len(CostModel.missing_settings(_settings())) == 9
+    for key in _ALL_COSTS:
+        partial = {k: v for k, v in _ALL_COSTS.items() if k != key}
+        s = _settings(**partial)
+        assert CostModel.from_settings(s) is None
+        assert CostModel.missing_settings(s) == [key.upper()]
+    assert CostModel.from_settings(_settings(**_ALL_COSTS)) == COSTS
 
 
 def test_execution_defaults_fail_closed():
@@ -76,6 +138,16 @@ def test_execution_defaults_fail_closed():
 def test_unverified_basis_can_never_be_approved_in_configuration():
     with pytest.raises(ValueError, match="UNVERIFIED_PROVIDER_NATIVE"):
         _settings(execution_approved_price_bases=[PriceBasis.UNVERIFIED_PROVIDER_NATIVE])
+
+
+def test_the_retired_same_bar_close_source_cannot_be_configured():
+    with pytest.raises(ValueError):
+        _settings(execution_price_source="candle_close")
+
+
+def test_daily_timeframe_cannot_be_the_execution_timeframe():
+    with pytest.raises(ValueError, match="intraday"):
+        _settings(execution_candle_timeframe="1d")
 
 
 # ---- position accounting --------------------------------------------------------------------
