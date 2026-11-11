@@ -81,3 +81,9 @@ desktop.ini
 
 # ---- Claude Code local state ----------------------------------------------------------
 .claude/settings.local.json
+
+# ---- Frontend (frontend/.gitignore covers node_modules, dist and build info) -----------
+# `data/` above is for local market data; the frontend's source module of the same name is code.
+!/frontend/src/data/
+# The shared VS Code workspace for backend + frontend is versioned; personal ones stay ignored.
+!/Agent-X.code-workspace

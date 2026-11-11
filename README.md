@@ -82,6 +82,12 @@ cd backend
 
 Interactive API docs: `http://localhost:8000/docs`. Full instructions, including Docker Compose, are in [docs/SETUP.md](docs/SETUP.md).
 
+**Frontend** (React + Vite, currently on mock data only; see [docs/FRONTEND.md](docs/FRONTEND.md)):
+```bash
+cd frontend && npm ci && npm run dev    # http://localhost:5173; /api is proxied to the backend on :8000
+```
+Open `Agent-X.code-workspace` in VS Code to work on the backend and frontend from one window; it includes tasks for both.
+
 ## Documentation
 
 - [docs/SETUP.md](docs/SETUP.md): environment, configuration, running, testing, migrations
@@ -93,6 +99,7 @@ Interactive API docs: `http://localhost:8000/docs`. Full instructions, including
 - [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends
 - [docs/STAGING.md](docs/STAGING.md) and [docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md): validation procedures
+- [docs/FRONTEND.md](docs/FRONTEND.md): the web UI (mock data only), how it connects to the API, and page-by-page integration gaps
 
 ## Architecture in brief
 
@@ -122,8 +129,9 @@ boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```
 backend/    FastAPI application, Alembic migrations, tests
-docs/       setup, architecture, market-data, backtesting and API documentation
-docker-compose.yml, .env.example, .gitignore, .gitattributes
+frontend/   React + TypeScript + Vite web UI (mock data only so far)
+docs/       setup, architecture, market-data, backtesting, API and frontend documentation
+docker-compose.yml, .env.example, .gitignore, .gitattributes, Agent-X.code-workspace
 ```
 
 ## Security note
