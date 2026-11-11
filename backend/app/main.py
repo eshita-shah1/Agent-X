@@ -1,5 +1,7 @@
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, Response, status
 from sqlalchemy import text
@@ -8,11 +10,18 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_engine, make_sessionmaker
+from app.marketdata.providers.registry import ProviderRegistry, build_default_registry
+from app.marketdata.service import utcnow
 
 log = logging.getLogger("agentx")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, provider_registry: ProviderRegistry | None = None, clock: Callable[[], datetime] | None = None
+) -> FastAPI:
+    """`provider_registry` and `clock` are test hooks for deterministic providers/time; production uses the
+    defaults (Yahoo, the real clock). Nothing market-data related runs on start-up: ingestion is only ever
+    started explicitly."""
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -24,6 +33,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = make_engine(settings.database_url, settings.db_connect_timeout_seconds)
     app.state.sessionmaker = make_sessionmaker(app.state.engine)
+    app.state.provider_registry = provider_registry or build_default_registry()
+    app.state.clock = clock or utcnow
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:
