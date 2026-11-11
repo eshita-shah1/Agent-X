@@ -22,13 +22,13 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import Clock
 from app.core.config import Settings
-from app.db.enums import OrderSide, OrderSource, OrderType
+from app.db.enums import EXECUTION_MODE_POLICY, OrderSide, OrderSource, OrderType
 from app.db.models import Instrument, Order, RiskDecision, VirtualAccount
 from app.db.scoping import owned_select
-from app.exchange.costs import CostModel
+from app.exchange.costs import CostModel, CostSchedule, CostScheduleError, load_cost_schedule
 from app.exchange.portfolio import PortfolioReader
 from app.exchange.pricing import ExecutionPriceGate, build_price_gate
-from app.exchange.service import MockExchange, instrument_problem, lock_account
+from app.exchange.service import MockExchange, instrument_problem, lock_account, session_date_of
 from app.exchange.types import OrderIntent
 from app.marketdata.calendar import timeframe_minutes
 from app.risk.engine import RiskResult, TradeProposal, evaluate
@@ -64,15 +64,38 @@ class TradingContext:
     exchange: MockExchange
     risk: RiskService
 
+    cost_schedule: CostSchedule | None = None
+    cost_problem: str | None = None  # why `costs` is None
+
     @classmethod
     def build(cls, db: Session, settings: Settings, clock: Clock, gate: ExecutionPriceGate | None = None):
         gate = gate or build_price_gate(settings, db, clock)
-        costs = CostModel.from_settings(settings)
+        schedule, problem = None, None
+        if settings.exchange_cost_schedule_path:
+            try:
+                schedule = load_cost_schedule(settings.exchange_cost_schedule_path)
+            except CostScheduleError as e:
+                problem = str(e)
+        else:
+            problem = "no cost schedule is configured (EXCHANGE_COST_SCHEDULE_PATH)"
+        costs = None
+        if schedule is not None:
+            try:
+                # today's rates for sizing and reservations; fills use the rates of their own simulated date
+                costs = schedule.resolve(
+                    settings.exchange_product, session_date_of(clock()), settings.exchange_max_volume_participation
+                )
+            except CostScheduleError as e:
+                problem = str(e)
         portfolio = PortfolioReader(db, gate)
         exchange = MockExchange(
-            db, gate, costs, clock, timeframe_minutes(settings.execution_candle_timeframe.value)
+            db, gate, schedule, clock, timeframe_minutes(settings.execution_candle_timeframe.value),
+            execution_policy=EXECUTION_MODE_POLICY.get(settings.execution_mode)
+            if not settings.execution_config_problems(session_date_of(clock()))
+            else None,
+            max_volume_participation=settings.exchange_max_volume_participation,
         )
-        return cls(db, clock, gate, costs, portfolio, exchange, RiskService(db, portfolio, clock))
+        return cls(db, clock, gate, costs, portfolio, exchange, RiskService(db, portfolio, clock), schedule, problem)
 
 
 class OrderService:
@@ -97,6 +120,11 @@ class OrderService:
             raise InvalidOrder(problem)
         if (intent.order_type is OrderType.LIMIT) != (intent.limit_price is not None):
             raise InvalidOrder("limit_price is required for LIMIT orders and not allowed for MARKET orders")
+        if intent.signal_at is not None:
+            if intent.signal_at.tzinfo is None:
+                raise InvalidOrder("signal_at must be timezone-aware")
+            if intent.signal_at > self.ctx.clock():
+                raise InvalidOrder("signal_at is in the future")
 
         price_check = self.ctx.gate.check(intent.instrument_id)
         snapshot = self.ctx.risk.snapshot(account, intent.instrument_id)
@@ -116,15 +144,20 @@ class OrderService:
         price_detail = (
             price_check.detail if price_check.ok else f"{price_check.rejection.value}: {price_check.detail}"
         )
-        result = evaluate(proposal, limits, snapshot, self.ctx.costs, price_check.ok, price_detail)
+        result = evaluate(
+            proposal, limits, snapshot, self.ctx.costs, price_check.ok, price_detail, self.ctx.cost_problem
+        )
+        decision_ref = price_check.quote.source_ref if price_check.quote else None
 
         if result.approved:
             order = self.ctx.exchange.submit(
-                account, intent, fingerprint, result.approved_quantity, risk_budget=result.risk_limit_amount
+                account, intent, fingerprint, result.approved_quantity, risk_budget=result.risk_limit_amount,
+                decision_price_ref=decision_ref,
             )
         else:
             order = self.ctx.exchange.record_rejected(
-                account, intent, fingerprint, "RISK_REJECTED: " + "; ".join(result.reasons)
+                account, intent, fingerprint, "RISK_REJECTED: " + "; ".join(result.reasons),
+                decision_price_ref=decision_ref,
             )
         decision = self._log_decision(account, intent, order, result, limits, snapshot.equity, price_check.as_dict())
         log.info(
@@ -178,6 +211,7 @@ class OrderService:
                 order_type=OrderType.MARKET,
                 quantity=sellable,
                 source=OrderSource.RISK_EXIT,
+                signal_at=check.quote.as_of,  # the bar whose range triggered the exit
             )
             results.append(self.submit(user_id, intent))
         return results
