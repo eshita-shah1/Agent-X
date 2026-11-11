@@ -160,7 +160,7 @@ and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
 | GET | `/api/v1/orders?status=&limit=` | Own orders, newest first |
 | GET | `/api/v1/orders/{id}` | Order with its fills and risk decision; `404` if not own |
 | POST | `/api/v1/orders/{id}/cancel` | Body `{"reason"?: str}`; `409` if not open; `404` if not own |
-| GET | `/api/v1/portfolio` | Cash, reserved, available, positions, realized/unrealized P&L, equity (`null` when any position cannot be marked with an eligible price) |
+| GET | `/api/v1/portfolio` | Cash, reserved, available, positions, realized/unrealized P&L, equity (`null` when any position cannot be marked with an eligible price). Each position carries `protective_exit_unresolved` (true while its stop/target could not be evaluated on fresh data: it is **not** protected by an executed exit) |
 | GET | `/api/v1/portfolio/fills?limit=` | Executions with price provenance |
 | GET | `/api/v1/portfolio/pnl/daily?session_date=YYYY-MM-DD` | Realized P&L, fees and net for a simulated (IST) session date: fills by their simulated fill time, cash-in-lieu by ex-date; plus `dividend_income` by payment date (not trading P&L) |
 | GET | `/api/v1/portfolio/corporate-actions/pending` | Positions frozen by a split/bonus/other action, with the action each is waiting for and the last attempt |
@@ -175,14 +175,17 @@ corporate-action records; each affected user's result is computed and recorded s
 |---|---|---|
 | GET | `/api/v1/operator/corporate-actions/pending` | Actions freezing positions, with the number of affected positions |
 | POST | `/api/v1/operator/corporate-actions/{id}/adjustments` | `{evidence_reference, confirm_ratio_numerator, confirm_ratio_denominator, cash_in_lieu_price?, cash_in_lieu_source?, cash_in_lieu_observed_at?}`. Applies to every affected position. Returns `[{user_id, adjustment, replayed}]` (APPLIED / REJECTED / BLOCKED_FRACTIONAL). `404` for an unknown action |
+| GET | `/api/v1/operator/protective-exits/unresolved` | Alert view: every user's OPEN protective-exit requirements, oldest first |
 | GET | `/api/v1/operator/dividends/pending` | Dividends past their ex-date with entitled users who have no credit (and users blocked by an unadjusted split) |
 | POST | `/api/v1/operator/dividends/{id}/credits` | `{evidence_reference, confirmed_amount_per_share, payment_date, accept_provider_difference?}`. Credits gross amounts to every entitled user (holding at the close before the ex-date). Returns `[{credit, replayed}]`. `422` if not a dividend or the amount is not positive |
 | GET | `/api/v1/risk/settings` | `404` until configured (no defaults) |
 | PUT | `/api/v1/risk/settings` | All fields required (see below) |
-| GET | `/api/v1/risk/state` | **Refreshes** the equity references first, then returns kill switch, peak/day-start/last equity, current `equity`, `drawdown_pct`, `daily_loss_pct` and `breaches` |
+| GET | `/api/v1/risk/state` | **Refreshes** the equity references first, then returns kill switch, peak/day-start/last equity, current `equity`, `drawdown_pct`, `daily_loss_pct`, `breaches` and `unresolved_protective_exits` (count of OPEN protective-exit requirements) |
+| GET | `/api/v1/risk/protective-exits?status=OPEN\|RESOLVED&limit=` | The caller's protective-exit requirements (migration `0011`): reason (e.g. `STALE`), the stale bar, `stale_trigger`, checks, resolution (`EXIT_SUBMITTED`, `EXIT_ALREADY_PENDING`, `NOT_TRIGGERED`, `POSITION_CLOSED`) and the exit order |
 | POST | `/api/v1/risk/kill-switch` | `{"engaged": bool, "reason": str}`; engaging cancels all open orders |
 | GET | `/api/v1/risk/decisions?limit=` | Risk decision log |
 | POST | `/api/v1/exchange/process` | Executes the caller's resting orders against bars finalized since they were accepted (next-bar-open model), expires DAY orders, refreshes risk. Returns `{changed_orders, risk}`. Explicitly triggered; nothing is scheduled |
+| POST | `/api/v1/exchange/protective-exits` | Evaluates the caller's stop-losses/take-profits on the latest eligible prices and submits MARKET exits where triggered. Without a fresh eligible price no exit is triggered and no price is fabricated: an OPEN requirement and an audit alert (`risk.protective_exit_unresolved`) are recorded instead, and resolved by the first run on fresh data. Returns `{submitted_exits, unresolved, risk}`. Explicitly triggered; nothing is scheduled |
 | GET | `/api/v1/exchange/status` | `execution_mode`, `execution_policy`, `execution_approval_reference`, execution model, whether execution is enabled and why not (`blocking_reasons`), and `disclosures` (in simulation mode: simulation-only fills on unverified Yahoo data; no five-year intraday backtesting at launch) |
 
 ### `POST /api/v1/orders`
@@ -205,7 +208,7 @@ corporate-action records; each affected user's result is computed and recorded s
 - `signal_at` (optional, timezone-aware): when the decision was made; never in the future; defaults to acceptance time.
 - `limit_price` is required for `LIMIT` and forbidden for `MARKET`. Prices are > 0 with at most 6 dp.
 - Entries (`BUY`) need `stop_loss_price` (otherwise risk rejects with `STOP_LOSS_REQUIRED`). `SELL` may not carry stop/take-profit.
-- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. Orders carry `signal_at`, `decision_price_ref` (the reference bar the decision used), `execution_policy` (policy in force at acceptance), `accepted_at` (only bars starting at or after it can fill them) and `risk_budget` (the user's hard per-trade risk limit in money; fills are capped by it if the next open gaps). Fills carry `realized_pnl` (attributed to the simulated fill time), `execution_policy` (`VERIFIED_NEXT_BAR_OPEN` or `SIMULATION_PROVIDER_NATIVE`), `price_source_kind` (`NEXT_BAR_OPEN` or `BAR_LIMIT_CROSS`) and `fee_breakdown` (brokerage, stt, txn_charge, sebi_fee, stamp_duty, gst, total). `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
+- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. Orders carry `signal_at`, `decision_price_ref` (the reference bar the decision used), `execution_policy` (policy in force at acceptance), `execution_approval_reference` (approval in force at acceptance; `null` while execution is disabled; immutable), `accepted_at` (only bars starting at or after it can fill them) and `risk_budget` (the user's hard per-trade risk limit in money; fills are capped by it if the next open gaps). Fills carry `realized_pnl` (attributed to the simulated fill time), `execution_policy` (`VERIFIED_NEXT_BAR_OPEN` or `SIMULATION_PROVIDER_NATIVE`), `execution_approval_reference` (copied from the order), `price_source_kind` (`NEXT_BAR_OPEN` or `BAR_LIMIT_CROSS`) and `fee_breakdown` (brokerage, stt, txn_charge, sebi_fee, stamp_duty, gst, total). `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
 
 ### `PUT /api/v1/risk/settings`
 ```json
