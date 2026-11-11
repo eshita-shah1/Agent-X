@@ -228,9 +228,8 @@ packages and execution code in `app/marketdata` stay forbidden).
 - On every cycle, call `ctx.exchange.process_open_orders(account)`, then `ctx.risk.refresh(account)` and
   `OrderService.run_protective_exits(user_id)`. Call `refresh` at session start. Phase 4 schedules nothing.
 - Backtesting (Phase 6) must use `app.exchange.costs.CostModel` and the same next-bar-open semantics, so that
-  paper trading and backtests agree. *Integration note:* the Phase 3 backtest (which absorbed Phase 6) was built in
-  parallel with its own approved cost and fill model and does **not** do this yet. The differences and the open
-  decision are in [BACKTESTING.md](BACKTESTING.md) §9.
+  paper trading and backtests agree. *Superseded at integration:* the Phase 3 backtest (which absorbed Phase 6) keeps its
+  own approved cost and fill model by decision. The differences and the rationale are in [BACKTESTING.md](BACKTESTING.md) §9.
 
 ### Exact signatures (as implemented)
 

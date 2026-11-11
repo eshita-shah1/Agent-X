@@ -191,7 +191,7 @@ Tests check the following:
 - Results are per instrument, not a portfolio; do not sum them.
 - Corporate-action records come from the provider and may be incomplete.
 
-## 9. Relationship to Phase 4 execution (open decision)
+## 9. Relationship to Phase 4 execution (decided: separate models)
 
 The Phase 3 backtest and the Phase 4 risk engine / Mock Exchange were developed in parallel and integrated afterwards.
 They are deliberately **separate**:
@@ -202,7 +202,7 @@ They are deliberately **separate**:
 Tests enforce this (`tests/backtest/test_phase_separation.py`, and an integration test asserting that a complete run
 leaves every Phase 4 table empty).
 
-Their simulation assumptions currently **differ**. Backtest results are therefore not expected to match Phase 4
+Their simulation assumptions **differ by design**. Backtest results are therefore not expected to match Phase 4
 simulated fills for the same signals:
 
 | Aspect | Phase 3 backtest (approved Phase 3 decisions) | Phase 4 Mock Exchange ([PHASE4.md](PHASE4.md), [D4_EXECUTION_READINESS.md](D4_EXECUTION_READINESS.md)) |
@@ -212,6 +212,12 @@ simulated fills for the same signals:
 | Costs | Generic `CostModel`, all zero by default (`GROSS_OF_COSTS`) | Operator-maintained, effective-dated Indian-equity component schedule |
 | Session | Intraday: mandatory 15:15 square-off, no overnight positions | `DELIVERY` product only; intraday square-off not modelled |
 
-Phase 4's documentation states that backtesting "must use `app.exchange.costs.CostModel` and the same next-bar-open
-semantics". That has **not** been applied, because it would change approved Phase 3 decisions. Whether, and how,
-to align the two models is an open owner decision.
+**Decision (Phase 3/4 integration): the two models stay separate.**
+- The backtest answers how an intraday strategy would have behaved under the approved Phase 3 rules: intraday only, 15:15 square-off, stops and targets at their levels, costs zero unless modelled.
+- The Mock Exchange performs delivery-product paper execution under Phase 4's execution policy.
+
+Making either use the other's model would change an approved decision on one side. That includes Phase 4's earlier
+note that backtesting "must use `app.exchange.costs.CostModel`", which is superseded by this decision.
+
+To approximate Phase 4 charges in a backtest, set the backtest's `cost_model` explicitly; the run is then labelled
+`NET_OF_MODELLED_COSTS`. Any future alignment is a new, explicit decision.
