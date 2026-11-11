@@ -87,7 +87,7 @@ Interactive API docs: `http://localhost:8000/docs`. Full instructions, including
 - [docs/SETUP.md](docs/SETUP.md): environment, configuration, running, testing, migrations
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): structure, authentication, isolation, raw/adjusted price separation
 - [docs/MARKET_DATA.md](docs/MARKET_DATA.md): Phase 2 market-data design, verified Yahoo behaviour, archive contents, limitations, operations
-- [docs/BACKTESTING.md](docs/BACKTESTING.md): Phase 3 indicators, strategies, selection, fill model, costs, stops/targets, benchmark, fingerprints, persistence (migration 0004) and limitations
+- [docs/BACKTESTING.md](docs/BACKTESTING.md): Phase 3 indicators, strategies, selection, fill model, costs, stops/targets, benchmark, fingerprints, persistence (migration 0009), relationship to Phase 4 execution and limitations
 - [docs/API.md](docs/API.md): endpoints
 - [docs/PHASE4.md](docs/PHASE4.md): risk engine, Mock Exchange, decision D4, shared contracts, limitations
 - [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
@@ -101,19 +101,22 @@ Modular monolith (FastAPI, SQLAlchemy, PostgreSQL). Dependencies point one way:
 ```
 marketdata (archive) ──read──> backtest_runs (database runner) ──> backtest (pure engine)
                                                                     └─> strategies + selection ──> indicators
-api/v1 (auth, account, market, backtests) ──> services above
+marketdata (archive) ──read──> orders ──> risk (engine) ──> exchange (Mock Exchange, costs, accounting)
+api/v1 (auth, account, market, backtests, trading, operator) ──> services above
 ```
 
 The pure layers (indicators, strategies, selection, backtest engine) have no database, network, clock or LLM
-dependencies, and tests enforce these boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+dependencies. The Phase 3 backtest and the Phase 4 execution path never import each other. Tests enforce these
+boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
 
-1. **Phase 3:** strategy and backtesting layer, implemented and approved.
-2. **Phase 4:** risk engine and Mock Exchange. This includes the execution-price policy for archived Yahoo prices, which is deferred from Phase 2.
-3. **Phase 5:** agent orchestration.
-4. **Phase 7:** LLM explanations and trading journal. The LLM explains decisions only and never decides them.
-5. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
+1. **Phase 3:** strategy and backtesting layer, implemented and approved; integrated with Phase 4 (migration `0009`).
+2. **Phase 4:** risk engine and Mock Exchange, implemented. Fills stay simulation-only until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)).
+3. **Open decision:** whether to align the backtest's cost and fill model with the Mock Exchange's ([docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
+4. **Phase 5:** agent orchestration.
+5. **Phase 7:** LLM explanations and trading journal. The LLM explains decisions only and never decides them.
+6. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
 
 ## Repository layout
 
