@@ -1,8 +1,34 @@
 # D4 — Execution Readiness (Yahoo Finance, simulation-only)
 
-**Status: B3, B4, B5, B10 and the operator/ingestion/staging tooling implemented and tested; B1, B2, B7, B8 and B9 await approval or external data (§8). Execution remains DISABLED** (`EXECUTION_MODE`
-defaults to `disabled`; no local override). Branch `phase-4-simulation-execution`, not committed. Paper trading only:
-real-money execution is out of scope and does not exist anywhere in the codebase.
+**Status (2026-11-12): B3, B4, B5, B10, the operator/ingestion/staging tooling and the staging-readiness fixes
+(validator timing, approval references, freshness policy, synthetic-schedule guard, stale protective exits) are
+implemented and tested; the development database is at `0011`. Staging is approved and fully scripted but has not run:
+it waits for fresh intraday data (next NSE session) and an administrator to provision `agentx_staging`. B2, B7
+(measurement), B8 (staging part) and the real-environment B1 approval remain open (§8). Execution remains DISABLED in
+development**
+(`EXECUTION_MODE` defaults to `disabled`; no local override). Paper trading only: real-money execution is out of scope
+and does not exist anywhere in the codebase.
+
+## 0. Three environments (do not confuse them)
+
+| | Development (`agentx`) | Simulation-only staging (`agentx_staging`) | Real-environment execution |
+|---|---|---|---|
+| `EXECUTION_MODE` | `disabled` | `simulation_provider_native`, **inside the validator process only** | `simulation_provider_native` in configuration |
+| Cost schedule | none | `SYNTHETIC_STAGING_ONLY` file outside Git (refused anywhere else) | verified Zerodha delivery schedule (B2) |
+| Approval reference | none | `STAGING-ONLY: <ref>` (prefixed by the validator) | owner approval id for the environment |
+| Data | live archive | `pg_dump` copy of the archive | live archive |
+| Database role | `agentx_app` | dedicated least-privilege role (STAGING.md §1) | `agentx_app` |
+| Status | in use | ready to provision; **not yet run** | **blocked** (§7.3, §8) |
+
+Staging proves the simulation mechanics on real Yahoo bars; it does **not** prove the cost rates (they are synthetic)
+and does not enable anything outside its own process.
+
+**Approved staging decisions (owner, 2026-11-12):** Yahoo Finance; `UNVERIFIED_PROVIDER_NATIVE`; simulation only;
+DELIVERY only; 5-minute ingestion during market hours; 15-minute maximum price age; synthetic staging-only schedule;
+`agentx_staging` owned by the least-privilege role `agentx_staging_app`; approval reference
+`STAGING-ONLY:AGENTX-MOCK-EXCHANGE-VALIDATION-001` (authorises only the isolated staging exercise, not real trading);
+approval references immutable on accepted orders and fills; pending orders cancelled `EXECUTION_APPROVAL_CHANGED` when
+the approval changes; real-money execution prohibited. Procedure and status: [STAGING.md](STAGING.md).
 
 ## 1. Decision recorded (owner, 2026-11-11)
 
@@ -137,7 +163,20 @@ Recorded on each order and fill:
 - product (`orders.product`);
 - fees (`fills.fee`, `fills.fee_breakdown`);
 - the cost schedule version, SHA-256 and rate ids used (`fills.cost_model`);
-- realized P&L (`fills.realized_pnl`).
+- realized P&L (`fills.realized_pnl`);
+- the **approval reference** in force at acceptance (`orders.execution_approval_reference`,
+  `fills.execution_approval_reference`; migration `0010`).
+
+### 5.3b Approval reference (migration 0010)
+- An order accepted under an execution policy records `EXECUTION_APPROVAL_REFERENCE`; while execution is disabled it
+  is `NULL`. A NOT VALID check requires it for every new order that carries a policy.
+- The value is immutable: it is one of the order guard trigger's identity columns.
+- Every fill copies its order's value. A NOT VALID check requires it on new fills, an insert trigger
+  (`trg_fills_approval_matches_order`) refuses any other value, and fills are append-only.
+- An order is never filled under a different approval: if the active reference differs from the order's, processing
+  cancels it (`EXECUTION_APPROVAL_CHANGED`), exactly as a mode change does (`EXECUTION_MODE_CHANGED`).
+- Rows created before `0010` keep `NULL` (history is not rewritten). Downgrading `0010` is refused while any reference
+  exists. The API returns the field on orders and fills.
 
 ### 5.3a Time (B10, fixed)
 | Column | Meaning | Used for |
@@ -155,6 +194,36 @@ Recorded on each order and fill:
   post-split scale is refused, and no false loss is booked
   (`test_regression_fill_processed_on_a_split_ex_date_cannot_book_a_false_loss`).
 - Remaining limit: `observed_at` is when Agent-X fetched the candle, not when Yahoo first published it.
+
+### 5.3c Freshness policy (B7, development decision 2026-11-11)
+- **Target ingestion cadence:** every 5 minutes during market hours, run by an external scheduler
+  ([OPERATIONS.md](OPERATIONS.md) §1). Agent-X still never schedules itself.
+- **Maximum price age:** 15 minutes (`EXECUTION_MAX_PRICE_AGE_SECONDS=900`, the default), measured from the reference
+  bar's close to the decision time.
+- **Stale prices block new orders** (entries and exits alike): `EXECUTION_PRICE_UNAVAILABLE: STALE`, recorded on the
+  rejected order and in `risk_decisions`. Stale data is never treated as current.
+- **Existing positions** stay under the established risk policy: marks need an eligible price, so equity is reported
+  `null` with the reason rather than estimated. Protective exits are never triggered from stale data and no price is
+  fabricated; instead (migration `0011`, `protective_exit_requirements`):
+  1. the first run that cannot evaluate a position's stop/target records one OPEN requirement (reason, the stale bar,
+     and `stale_trigger` = SL/TP if that bar had already crossed the level) and an audit alert
+     `risk.protective_exit_unresolved`;
+  2. the position is reported `protective_exit_unresolved: true` (`GET /portfolio`), the risk state counts it
+     (`unresolved_protective_exits`) and operators see every user's OPEN requirements
+     (`GET /operator/protective-exits/unresolved`);
+  3. later stale runs update the same row (`checks`, `last_checked_at`); there is at most one OPEN row per position;
+  4. the first run on a fresh eligible price resolves it under the same rule: an exit is submitted if the fresh bar
+     crosses **or** a crossing was already observed on the stale bar (`EXIT_SUBMITTED`); otherwise `NOT_TRIGGERED`;
+     `EXIT_ALREADY_PENDING` if an exit already rests; `POSITION_CLOSED` if the position was closed meanwhile; an exit
+     refused by the exchange keeps it OPEN. Each resolution raises `risk.protective_exit_resolved`;
+  5. exits are deduplicated by the existing rules (client order id per position and observation; sellable quantity
+     excludes resting exits); rows are never deleted, resolved rows are frozen and a recorded `stale_trigger` cannot be
+     cleared (trigger).
+  Runs are explicit: `POST /api/v1/exchange/protective-exits` (Phase 5 will call the same service each cycle).
+  Orders already resting fill on their next bar once it is recorded (fill bars have no age limit, only the
+  no-lookahead and integrity checks).
+- **Ingestion failures** are recorded by Phase 2 (`data_ingestion_jobs`, `provider_health_state`, per-run reports).
+- Still to confirm before the real environment: the latency measurement on the integration machine (OPERATIONS.md §2).
 
 ### 5.4 Rejected candles
 - **Stale:** a reference bar older than `EXECUTION_MAX_PRICE_AGE_SECONDS`.
@@ -298,26 +367,33 @@ See §10 for the results. Coverage:
   - intraday refusal.
 - **Migration `0007`:** clean upgrade, downgrade/upgrade round trip, no model drift, downgrade refused with data.
 
-### 7.3 Tests still required before enabling
-- [ ] Cost **golden tests against real delivery contract notes** from the owner's broker. Every value in the current
-      tests is a formula check on synthetic rates (§9).
-- [ ] Staging run on a copy of the real Yahoo archive (B9).
-- [ ] Latency measurement for the freshness threshold (B7).
-- [ ] Full suite and Docker on the Windows integration machine (B8).
+### 7.3 Outstanding requirements for real-environment enablement
+- [ ] **Verified delivery cost rates** (B2): Zerodha's official tariff and every statutory rate, with sources and
+      effective dates, in a schedule that is not `SYNTHETIC_STAGING_ONLY`.
+- [ ] Cost **golden tests against real delivery contract notes** from the owner's broker (a buy, a sell with a DP
+      charge, a multi-trade day). Every value in the current tests is a formula check on synthetic rates (§9).
+- [ ] **Fresh intraday data**: at least one session ingested on the 5-minute cadence, so the archive holds a run of 8+
+      bars recorded within 15 minutes of their close (2026-11-12 00:00 IST: best run 3; `ops freshness`).
+- [ ] Staging runs on a copy of the real Yahoo archive (B9): both validator runs exit 0, and the lifecycle exercise
+      exits 0 (STAGING.md §5).
+- [ ] Latency measurement confirming the 15-minute threshold under the 5-minute cadence (B7).
+- [ ] Full suite and Docker on the Windows integration machine, recorded (B8).
+- [ ] **Final owner approvals**: the simulation price policy for the real environment (B1) and the
+      `EXECUTION_APPROVAL_REFERENCE` to record on every order and fill.
 
 ## 8. Blockers
 
 | # | Blocker | Classification | What remains |
 |---|---|---|---|
-| B1 | Simulation price policy | **WAITING FOR USER APPROVAL** | Implemented and verified by tests and mutation checks; approve it and issue `EXECUTION_APPROVAL_REFERENCE` |
+| B1 | Simulation price policy | **APPROVED FOR STAGING; REAL ENVIRONMENT WAITING FOR USER APPROVAL** | Yahoo prices, `UNVERIFIED_PROVIDER_NATIVE`, simulation-only, approved for simulation-only staging (2026-11-11). Approval references are now recorded immutably on orders and fills (§5.3b). The real-environment approval and its reference are still to be issued |
 | B2 | Delivery cost schedule (Zerodha) | **WAITING FOR EXTERNAL DATA** | The cost engine and the contract-note golden harness are ready. Needed: Zerodha's official delivery tariff (with effective dates) and redacted real delivery contract notes (a buy, a sell with a DP charge, a multi-trade day) |
 | B3 | Cost model gaps | **RESOLVED** | Formula-tested; real-note validation is B2 |
 | B4 | Corporate-action recovery | **RESOLVED** | Now operator-only, with cash-in-lieu provenance |
 | B5 | Dividend crediting | **IMPLEMENTED BUT NOT VALIDATED** | Tested on synthetic data; no real dividend has been credited end to end on archive data. TDS is not handled (documented) |
-| B6 | Daily ingestion | **IMPLEMENTED BUT NOT VALIDATED** | `ops daily` verified against live Yahoo on the Mac. The external schedule must be installed on the integration machine; the intraday cadence depends on B7 |
-| B7 | Slippage and staleness thresholds | **WAITING FOR USER APPROVAL** | Measurement procedure and `ops latency` exist. Decide the ingestion cadence (intraday every N minutes) or an explicitly larger threshold, after measuring during market hours |
-| B8 | Windows | **WAITING FOR EXTERNAL DATA** | No Windows access here. Eshita runs [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md) |
-| B9 | Staging validation | **WAITING FOR USER APPROVAL** | Runner tested on synthetic data and copy procedure verified on real data. Needed: an approved staging config (schedule plus approval reference), then a run on the integration machine's archive |
+| B6 | Daily ingestion | **IMPLEMENTED; SCHEDULE TO REGISTER** | `scripts\windows\ingest_intraday.ps1` run-tested on the Windows integration machine (2026-11-11: SUCCEEDED, real bars archived, nothing back-dated). The 5-minute Task Scheduler task (`register_ingestion_task.ps1`) must be registered by the owner |
+| B7 | Slippage and staleness thresholds | **DECIDED (development); MEASUREMENT PENDING** | 5-minute ingestion target, 15-minute maximum price age, stale prices block new orders (§5.3c). Confirm with `ops latency` on the integration machine during market hours. The slippage value remains part of the B2 schedule |
+| B8 | Windows | **PARTLY DONE** | Recorded in [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md) (2026-11-12): environment, configuration, dev migration, suite, API start/stop/restart, ingestion, Docker. Staging steps wait for B9 prerequisites; the disposable-database migration round trip needs an administrator |
+| B9 | Staging validation | **APPROVED AND SCRIPTED; NOT RUN** | Approval reference issued. Validator, lifecycle runner, copy and provisioning scripts ready and tested on synthetic archives with realistic lags. Waiting for: fresh intraday data (next session) and an administrator running `scripts/staging/provision_staging.sql`. Then `staging_copy.ps1` and `staging_validate.ps1` (STAGING.md) |
 | B10 | Simulated fill time | **RESOLVED** | — |
 
 Architectural decisions:
