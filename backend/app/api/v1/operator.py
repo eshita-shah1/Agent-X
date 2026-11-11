@@ -6,6 +6,7 @@ positions directly: each affected user's adjustment or credit is computed and re
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_current_user, get_db
@@ -19,8 +20,9 @@ from app.api.v1.trading_schemas import (
     OperatorDividendResult,
     PendingDividendResponse,
     PendingOperatorAdjustmentResponse,
+    ProtectiveExitRequirementResponse,
 )
-from app.db.models import AuditEvent, User
+from app.db.models import AuditEvent, ProtectiveExitRequirement, User
 from app.exchange.corporate_actions import ADJUSTABLE, CorporateActionNotFound, CorporateActionService
 from app.exchange.dividends import DividendError, DividendService
 from app.orders.service import TradingContext
@@ -118,3 +120,14 @@ def credit_dividend(
         OperatorDividendResult(credit=DividendCreditResponse.model_validate(r.credit), replayed=r.replayed)
         for r in results
     ]
+
+
+@router.get("/protective-exits/unresolved", response_model=list[ProtectiveExitRequirementResponse])
+def unresolved_protective_exits(_: User = Depends(require_operator), db: Session = Depends(get_db)):
+    """Alert view: every user's positions whose stop-loss/take-profit could not be evaluated on fresh data. They are
+    not protected by an executed exit until resolved (a protective-exit run on fresh data)."""
+    return list(db.scalars(
+        select(ProtectiveExitRequirement)
+        .where(ProtectiveExitRequirement.status == "OPEN")
+        .order_by(ProtectiveExitRequirement.detected_at, ProtectiveExitRequirement.id)
+    ))

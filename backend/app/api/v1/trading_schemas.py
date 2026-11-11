@@ -63,6 +63,7 @@ class FillResponse(BaseModel):
     provider_code: str
     price_basis: PriceBasis
     execution_policy: ExecutionPolicy
+    execution_approval_reference: str | None  # the order's approval; NULL only for fills booked before 0010
     realized_pnl: Decimal | None
     price_as_of: datetime
     price_observed_at: datetime
@@ -119,6 +120,7 @@ class OrderResponse(BaseModel):
     signal_at: datetime
     decision_price_ref: str | None
     execution_policy: ExecutionPolicy | None
+    execution_approval_reference: str | None  # approval in force at acceptance; NULL while execution was disabled
     product: Product
     risk_budget: Decimal | None
     created_at: datetime
@@ -184,10 +186,41 @@ class RiskStateResponse(BaseModel):
     drawdown_pct: Decimal | None
     daily_loss_pct: Decimal | None
     breaches: list[str]
+    # Positions whose stop-loss/take-profit could not be evaluated on fresh data (not protected by an executed exit).
+    unresolved_protective_exits: int = 0
 
 
 class ProcessResponse(BaseModel):
     changed_orders: list["OrderResponse"]
+    risk: RiskStateResponse
+
+
+class ProtectiveExitRequirementResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: uuid.UUID
+    position_id: int
+    instrument_id: int
+    status: str
+    reason_code: str
+    detail: str
+    stale_trigger: str | None
+    quote_ref: str | None
+    quote_as_of: datetime | None
+    stop_loss_price: Decimal | None
+    take_profit_price: Decimal | None
+    detected_at: datetime
+    last_checked_at: datetime
+    checks: int
+    resolved_at: datetime | None
+    resolution: str | None
+    exit_order_id: uuid.UUID | None
+
+
+class ProtectiveExitRunResponse(BaseModel):
+    submitted_exits: list["OrderResponse"]
+    unresolved: list[ProtectiveExitRequirementResponse]
     risk: RiskStateResponse
 
 
@@ -212,6 +245,9 @@ class PositionResponse(BaseModel):
     market_value: Decimal | None
     unrealized_pnl: Decimal | None
     mark_unavailable_reason: str | None
+    # True while an OPEN protective-exit requirement exists: the stop/target could not be evaluated on fresh data,
+    # so the position must not be presented as protected by an executed exit.
+    protective_exit_unresolved: bool = False
 
 
 class PortfolioResponse(BaseModel):
@@ -396,4 +432,5 @@ class DailyPnlResponse(BaseModel):
 
 
 ProcessResponse.model_rebuild()
+ProtectiveExitRunResponse.model_rebuild()
 OperatorAdjustmentResult.model_rebuild()

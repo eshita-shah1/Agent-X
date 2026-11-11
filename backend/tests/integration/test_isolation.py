@@ -107,6 +107,7 @@ USER_OWNED_TABLES = {
     "risk_decisions",
     "corporate_action_adjustments",  # migration 0007
     "dividend_credits",  # migration 0008
+    "protective_exit_requirements",  # migration 0011
     # Phase 3 backtests (migration 0009): every result row carries its run's owner (an insert trigger requires it to
     # match the run's)
     "backtest_runs", "backtest_instrument_results", "backtest_selection_decisions", "backtest_trades", "backtest_events",

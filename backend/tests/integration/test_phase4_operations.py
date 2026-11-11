@@ -371,9 +371,11 @@ def test_staging_runner_on_a_synthetic_archive(db, test_settings):
     provider = make_provider(db, "yahoo")
     inst = make_instrument(db, "STAGECO")
     start = datetime(2026, 1, 5, 3, 45, tzinfo=UTC)  # 09:15 IST
-    for i in range(10):
+    # Realistic recording delays: every bar is recorded 2-3 minutes after it closes (never at the close).
+    lags = [143, 151, 160, 149, 171, 144, 158, 162, 150, 147, 155, 149]
+    for i, lag in enumerate(lags):
         make_candle(db, provider, inst, str(100 + i), end=start + timedelta(minutes=5 * (i + 1)), open=str(100 + i),
-                    verified=False, observed_delay=timedelta(0))
+                    verified=False, observed_delay=timedelta(seconds=lag))
     settings = test_settings.model_copy(update={
         "execution_mode": "simulation_provider_native", "execution_approval_reference": "STAGING-ONLY: test",
         "execution_approved_providers": ["yahoo"], "execution_approved_price_bases": [],
@@ -384,11 +386,48 @@ def test_staging_runner_on_a_synthetic_archive(db, test_settings):
     rep = run_staging_validation(make_sessionmaker(db.get_bind()), settings).as_dict()
     failed = [c for c in rep["checks"] if c["status"] == "FAIL"]
     assert rep["ok"], failed
+    assert rep["order_flow_exercised"]
     passed = {c["check"] for c in rep["checks"] if c["status"] == "PASS"}
-    assert {"next_bar_open_fill", "fill_price_is_next_bar_open_plus_slippage", "fees_recomputed_independently",
+    assert {"fill_on_expected_bar", "fill_price_is_fill_bar_open_plus_slippage", "fees_recomputed_independently",
             "ledger_reconciles", "restart_recovery_books_nothing_twice", "duplicate_submission_is_idempotent",
-            "daily_pnl_matches_fills", "stale_data_rejected", "archive_unmodified"} <= passed
+            "no_fill_before_fill_bar_is_recorded", "decision_used_recorded_reference_bar",
+            "order_records_approval_reference", "fill_records_order_approval_reference",
+            "exit_filled_on_expected_bar", "daily_pnl_matches_fills", "stale_data_rejected", "archive_unmodified"} <= passed
     assert {c["check"] for c in rep["checks"] if c["status"] == "NOT_EXERCISED"} >= {"partial_fills"}
+    entry = rep["scenario"]["entry"]
+    # Accepted after the next bar had started (the reference was recorded 2-3 min after its close): the fill bar is
+    # the one after it, starting at or after acceptance, and processing waited until that bar was recorded.
+    assert entry["fill_bar_start"] >= entry["decided_at"]
+    assert datetime.fromisoformat(entry["fill_bar_start"]) - datetime.fromisoformat(entry["reference_bar_end"]) == timedelta(minutes=5)
+    assert entry["processed_at"] == entry["fill_bar_recorded_at"]
+
+
+def test_staging_runner_on_a_backfilled_archive_exercises_nothing_and_fabricates_nothing(db, test_settings):
+    """Every bar recorded days after it closed (as a backfill is): no reference is ever fresh, so the order flow is
+    NOT_EXERCISED (exit code 2 from the CLI), never passed and never failed."""
+    from tests.cost_fixtures import FIXTURE_SCHEDULE_PATH
+    from tests.integration.trading_support import make_instrument, make_provider
+
+    provider = make_provider(db, "yahoo")
+    inst = make_instrument(db, "STAGECO")
+    start = datetime(2026, 1, 5, 3, 45, tzinfo=UTC)
+    for i in range(20):
+        make_candle(db, provider, inst, str(100 + i), end=start + timedelta(minutes=5 * (i + 1)), open=str(100 + i),
+                    verified=False, observed_delay=timedelta(days=3))
+    settings = test_settings.model_copy(update={
+        "execution_mode": "simulation_provider_native", "execution_approval_reference": "STAGING-ONLY: test",
+        "execution_approved_providers": ["yahoo"], "execution_approved_price_bases": [],
+        "exchange_cost_schedule_path": str(FIXTURE_SCHEDULE_PATH),
+    })
+    from app.ops.staging import run_staging_validation
+
+    users_before = db.scalar(select(func.count()).select_from(User))
+    rep = run_staging_validation(make_sessionmaker(db.get_bind()), settings)
+    d = rep.as_dict()
+    assert d["ok"] and not d["order_flow_exercised"]
+    assert {c["check"]: c["status"] for c in d["checks"]}["scenario"] == "NOT_EXERCISED"
+    assert d["archive"]["freshness"]["recorded_within_max_age"] == 0
+    assert db.scalar(select(func.count()).select_from(User)) == users_before  # nothing was created
 
 
 def test_staging_settings_refuse_non_staging_databases(test_settings):

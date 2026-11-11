@@ -162,6 +162,11 @@ class Order(UserOwnedMixin, Base):
         CheckConstraint("risk_budget IS NULL OR risk_budget >= 0", name="risk_budget_non_negative"),
         # A signal can never come from after the order was accepted (migration 0006).
         CheckConstraint("signal_at <= accepted_at", name="signal_not_after_acceptance"),
+        # Migration 0010 (NOT VALID: binds new rows only): an order accepted under an execution policy names the
+        # approval that enabled it.
+        CheckConstraint(
+            "execution_policy IS NULL OR execution_approval_reference IS NOT NULL", name="policy_has_approval_reference"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -199,6 +204,10 @@ class Order(UserOwnedMixin, Base):
     )
     # Migration 0007: product whose cost rates apply (only DELIVERY is executed today).
     product: Mapped[Product] = mapped_column(_enum(Product, "product"), nullable=False, server_default="DELIVERY")
+    # Migration 0010: EXECUTION_APPROVAL_REFERENCE in force when the order was accepted (NULL while execution was
+    # disabled, and for orders created before 0010). Immutable (order guard trigger); every fill copies it, and an
+    # order is never filled under a different approval (it is cancelled EXECUTION_APPROVAL_CHANGED instead).
+    execution_approval_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = _ts(default_now=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -230,6 +239,9 @@ class Fill(UserOwnedMixin, Base):
         CheckConstraint(
             "price_as_of <= executed_at AND price_observed_at <= executed_at", name="price_not_from_future"
         ),
+        # Migration 0010 (NOT VALID: binds new fills only; older fills predate the column). An insert trigger also
+        # requires the value to equal the order's; fills are append-only, so it never changes.
+        CheckConstraint("execution_approval_reference IS NOT NULL", name="has_approval_reference"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -256,6 +268,8 @@ class Fill(UserOwnedMixin, Base):
     # (`price_as_of`). NULL only for fills booked before 0007.
     realized_pnl: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     executed_at: Mapped[datetime] = _ts()  # when the simulator booked the fill (processing time)
+    # Migration 0010: the order's approval reference (NULL only for fills booked before 0010).
+    execution_approval_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class CashLedgerEntry(UserOwnedMixin, Base):
@@ -327,6 +341,49 @@ class Position(UserOwnedMixin, Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class ProtectiveExitRequirement(UserOwnedMixin, Base):
+    """An open position whose stop-loss/take-profit could not be evaluated because no eligible fresh price existed
+    (migration 0011). While OPEN the position is NOT protected by an executed exit; the requirement is re-evaluated on
+    every protective-exit run and resolved only by an outcome on fresh data (or the position closing). At most one
+    OPEN row per position; resolved rows are frozen and no row is ever deleted (trigger)."""
+
+    __tablename__ = "protective_exit_requirements"
+    __table_args__ = (
+        CheckConstraint("status IN ('OPEN', 'RESOLVED')", name="status_valid"),
+        CheckConstraint("stale_trigger IS NULL OR stale_trigger IN ('SL', 'TP')", name="stale_trigger_valid"),
+        CheckConstraint(
+            "(status = 'OPEN' AND resolved_at IS NULL AND resolution IS NULL)"
+            " OR (status = 'RESOLVED' AND resolved_at IS NOT NULL AND resolution IS NOT NULL)",
+            name="resolution_matches_status",
+        ),
+        CheckConstraint("checks >= 1", name="checks_positive"),
+        Index("uq_protective_exit_requirements_open_per_position", "position_id", unique=True,
+              postgresql_where=text("status = 'OPEN'")),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("virtual_accounts.id", ondelete="RESTRICT"), nullable=False)
+    position_id: Mapped[int] = mapped_column(ForeignKey("positions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id", ondelete="RESTRICT"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(32), nullable=False)  # the price-gate rejection, e.g. STALE
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    # The level the latest (ineligible) observation had already crossed, if any: it is never forgotten.
+    stale_trigger: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    quote_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    quote_as_of: Mapped[datetime | None] = _ts(nullable=True)
+    stop_loss_price: Mapped[Decimal | None] = mapped_column(PRICE, nullable=True)
+    take_profit_price: Mapped[Decimal | None] = mapped_column(PRICE, nullable=True)
+    detected_at: Mapped[datetime] = _ts()
+    last_checked_at: Mapped[datetime] = _ts()
+    checks: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    resolved_at: Mapped[datetime | None] = _ts(nullable=True)
+    # EXIT_SUBMITTED | EXIT_ALREADY_PENDING | NOT_TRIGGERED | POSITION_CLOSED
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    exit_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), nullable=True)
+    created_at: Mapped[datetime] = _ts(default_now=True)
 
 
 class RiskDecision(UserOwnedMixin, Base):
