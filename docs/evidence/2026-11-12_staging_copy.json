@@ -1,0 +1,92 @@
+﻿{
+    "generated_at":  "2026-11-12T00:47:47.2824384+05:30",
+    "source_db":  "agentx",
+    "staging_db":  "agentx_staging",
+    "staging_role":  "agentx_staging_app",
+    "staging_role_attributes":  "rolsuper=false rolcreatedb=false rolcreaterole=false",
+    "staging_alembic_revision":  "0011 (head)",
+    "dump_file":  "agentx_archive_20261112T004737.dump",
+    "dump_sha256":  "a3eb7b696a0e7c3beb2383cfe84dce6edaa6609265c4c246af3103fa8eff15e2",
+    "non_archive_rows_in_copy":  0,
+    "all_tables_match":  true,
+    "tables":  {
+                   "data_providers":  {
+                                          "rows":  1,
+                                          "md5":  "95719ae1993b9cb07390706237d93190",
+                                          "copy":  "1|95719ae1993b9cb07390706237d93190",
+                                          "match":  true
+                                      },
+                   "instruments":  {
+                                       "rows":  12,
+                                       "md5":  "e4eaa2200e675b30c75eb4161e0242d9",
+                                       "copy":  "12|e4eaa2200e675b30c75eb4161e0242d9",
+                                       "match":  true
+                                   },
+                   "instrument_provider_symbols":  {
+                                                       "rows":  10,
+                                                       "md5":  "9696a47ac0524f22ad93a666abe1ae60",
+                                                       "copy":  "10|9696a47ac0524f22ad93a666abe1ae60",
+                                                       "match":  true
+                                                   },
+                   "provider_capabilities":  {
+                                                 "rows":  9,
+                                                 "md5":  "aef412cae58373a506f98994a795f728",
+                                                 "copy":  "9|aef412cae58373a506f98994a795f728",
+                                                 "match":  true
+                                             },
+                   "provider_health_state":  {
+                                                 "rows":  1,
+                                                 "md5":  "b5b7d6f80d3c7644d81111f5aeb6ecd6",
+                                                 "copy":  "1|b5b7d6f80d3c7644d81111f5aeb6ecd6",
+                                                 "match":  true
+                                             },
+                   "data_ingestion_jobs":  {
+                                               "rows":  3,
+                                               "md5":  "d4a5ef2727418951a5e350a84131034e",
+                                               "copy":  "3|d4a5ef2727418951a5e350a84131034e",
+                                               "match":  true
+                                           },
+                   "data_ingestion_batches":  {
+                                                  "rows":  30,
+                                                  "md5":  "ea9a09ac7e9f86325e6bb65c93a2c586",
+                                                  "copy":  "30|ea9a09ac7e9f86325e6bb65c93a2c586",
+                                                  "match":  true
+                                              },
+                   "data_quality_issues":  {
+                                               "rows":  703,
+                                               "md5":  "837b8ea8eb34c0d3cfe312d13cf2cd7c",
+                                               "copy":  "703|837b8ea8eb34c0d3cfe312d13cf2cd7c",
+                                               "match":  true
+                                           },
+                   "data_restatement_events":  {
+                                                   "rows":  10,
+                                                   "md5":  "f9954febc9f41af57304431a587e7213",
+                                                   "copy":  "10|f9954febc9f41af57304431a587e7213",
+                                                   "match":  true
+                                               },
+                   "exchange_calendar_days":  {
+                                                  "rows":  0,
+                                                  "md5":  "d41d8cd98f00b204e9800998ecf8427e",
+                                                  "copy":  "0|d41d8cd98f00b204e9800998ecf8427e",
+                                                  "match":  true
+                                              },
+                   "candles":  {
+                                   "rows":  28587,
+                                   "md5":  "b0c93043fab4288dc11b7914f1b32fbc",
+                                   "copy":  "28587|b0c93043fab4288dc11b7914f1b32fbc",
+                                   "match":  true
+                               },
+                   "adjusted_candles":  {
+                                            "rows":  0,
+                                            "md5":  "d41d8cd98f00b204e9800998ecf8427e",
+                                            "copy":  "0|d41d8cd98f00b204e9800998ecf8427e",
+                                            "match":  true
+                                        },
+                   "corporate_actions":  {
+                                             "rows":  410,
+                                             "md5":  "c2b8c854221543a1be080e13a6f051ad",
+                                             "copy":  "410|c2b8c854221543a1be080e13a6f051ad",
+                                             "match":  true
+                                         }
+               }
+}

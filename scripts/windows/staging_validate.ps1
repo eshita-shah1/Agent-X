@@ -13,7 +13,9 @@ param(
     [string]$ApprovalReference = "STAGING-ONLY:AGENTX-MOCK-EXCHANGE-VALIDATION-001",
     [string]$Schedule = ""
 )
-$ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 turns a native tool's stderr (Alembic logs, pg_restore/psql notices) into a terminating error
+# under "Stop". Native results are checked explicitly through $LASTEXITCODE below instead.
+$ErrorActionPreference = "Continue"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $backend = Join-Path $repo "backend"
 $python = Join-Path $repo ".venv\Scripts\python.exe"
