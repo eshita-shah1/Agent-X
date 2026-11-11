@@ -22,6 +22,7 @@ from app.api.v1.trading_schemas import (
     OrderSubmitResponse,
     PortfolioResponse,
     PositionResponse,
+    ProcessResponse,
     RiskDecisionResponse,
     RiskSettingsRequest,
     RiskSettingsResponse,
@@ -36,7 +37,7 @@ from app.exchange.costs import CostModel
 from app.exchange.service import OrderNotCancellable, OrderNotFound, lock_account
 from app.exchange.types import OrderIntent
 from app.orders.service import IdempotencyConflict, InvalidOrder, OrderService, TradingContext
-from app.risk.service import RiskSettingsInput
+from app.risk.service import RiskSettingsInput, RiskStatus
 
 router = APIRouter(tags=["trading"])
 
@@ -235,17 +236,30 @@ def put_risk_settings(
 
 @router.get("/risk/state", response_model=RiskStateResponse)
 def get_risk_state(user: User = Depends(get_current_user), ctx: TradingContext = Depends(get_trading)):
-    state = ctx.risk.get_state(user.id, create=False)
-    if state is None:
-        return RiskStateResponse(
-            kill_switch_engaged=False,
-            kill_switch_reason=None,
-            kill_switch_changed_at=None,
-            peak_equity=None,
-            day_session_date=None,
-            day_start_equity=None,
-        )
-    return state
+    """Refreshes the risk references (peak / day-start equity) before reporting, so risk metrics do not
+    depend on an order having been submitted."""
+    account = lock_account(ctx.db, user.id)
+    status_ = ctx.risk.refresh(account)
+    ctx.db.commit()
+    return _risk_response(status_)
+
+
+def _risk_response(s: RiskStatus) -> RiskStateResponse:
+    st = s.state
+    return RiskStateResponse(
+        kill_switch_engaged=st.kill_switch_engaged,
+        kill_switch_reason=st.kill_switch_reason,
+        kill_switch_changed_at=st.kill_switch_changed_at,
+        peak_equity=st.peak_equity,
+        day_session_date=st.day_session_date,
+        day_start_equity=st.day_start_equity,
+        last_equity=st.last_equity,
+        last_equity_at=st.last_equity_at,
+        equity=s.equity,
+        drawdown_pct=s.drawdown_pct.quantize(Decimal("0.0001")) if s.drawdown_pct is not None else None,
+        daily_loss_pct=s.daily_loss_pct.quantize(Decimal("0.0001")) if s.daily_loss_pct is not None else None,
+        breaches=s.breaches,
+    )
 
 
 @router.post("/risk/kill-switch", response_model=RiskStateResponse)
@@ -253,9 +267,10 @@ def set_kill_switch(
     body: KillSwitchRequest, user: User = Depends(get_current_user), ctx: TradingContext = Depends(get_trading)
 ):
     account = lock_account(ctx.db, user.id)
-    state = ctx.risk.set_kill_switch(account, body.engaged, body.reason, ctx.exchange)
+    ctx.risk.set_kill_switch(account, body.engaged, body.reason, ctx.exchange)
+    status_ = ctx.risk.refresh(account)
     ctx.db.commit()
-    return state
+    return _risk_response(status_)
 
 
 @router.get("/risk/decisions", response_model=list[RiskDecisionResponse])
@@ -271,7 +286,22 @@ def list_risk_decisions(
     )
 
 
-# ---- exchange status -------------------------------------------------------------------------
+# ---- exchange processing and status ---------------------------------------------------------
+
+
+@router.post("/exchange/process", response_model=ProcessResponse)
+def process_orders(user: User = Depends(get_current_user), ctx: TradingContext = Depends(get_trading)):
+    """Execute the caller's resting orders against bars finalized since they were accepted, expire DAY orders,
+    then refresh the risk references. Explicitly triggered (no scheduler); Phase 5 will call the same service."""
+    account = lock_account(ctx.db, user.id)
+    changed = ctx.exchange.process_open_orders(account)
+    status_ = ctx.risk.refresh(account)
+    ctx.db.commit()
+    return ProcessResponse(
+        changed_orders=[OrderResponse.model_validate(o) for o in changed], risk=_risk_response(status_)
+    )
+
+
 
 
 @router.get("/exchange/status", response_model=ExchangeStatusResponse)
@@ -287,11 +317,12 @@ def exchange_status(
     if not settings.execution_approved_providers:
         blocking.append("NO_APPROVED_PROVIDER")
     elif len(settings.execution_approved_providers) != 1:
-        blocking.append("AMBIGUOUS_PROVIDER: exactly one provider must be approved for candle_close")
+        blocking.append("AMBIGUOUS_PROVIDER: exactly one provider must be approved")
     if costs is None:
-        blocking.append("COSTS_NOT_CONFIGURED")
+        blocking.append("COSTS_NOT_CONFIGURED: " + ", ".join(CostModel.missing_settings(settings)))
     return ExchangeStatusResponse(
         execution_price_source=settings.execution_price_source,
+        execution_model="NEXT_BAR_OPEN: fills at the open of the first finalized bar after acceptance",
         execution_enabled=not blocking,
         approved_price_bases=settings.execution_approved_price_bases,
         approved_providers=settings.execution_approved_providers,
