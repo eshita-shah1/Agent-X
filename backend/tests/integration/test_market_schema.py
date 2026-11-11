@@ -309,12 +309,12 @@ def test_downgrading_0003_is_refused_while_any_market_data_would_be_discarded(en
     table = holding.split(" ")[0]
     with engine.connect() as conn:
         before = conn.execute(text(f"select count(*) from {table}")).scalar()
-        version = conn.execute(text("select version_num from alembic_version")).scalar()  # head (0004 since Phase 3)
+        head = conn.execute(text("select version_num from alembic_version")).scalar()  # the current head (0009)
     with pytest.raises(RuntimeError, match=re.escape(holding)):
         with engine.begin() as conn:
             command.downgrade(alembic_config(conn), "0002")
     with engine.connect() as conn:
-        assert conn.execute(text("select version_num from alembic_version")).scalar() == version  # fully rolled back
+        assert conn.execute(text("select version_num from alembic_version")).scalar() == head  # nothing was undone
         assert conn.execute(text(f"select count(*) from {table}")).scalar() == before > 0  # nothing was discarded
 
 
