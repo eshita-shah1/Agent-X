@@ -1,4 +1,7 @@
-"""backtest runs and results (Phase 3, Step 4B; additive: 0001-0003 are unchanged)
+"""backtest runs and results (Phase 3, Step 4B; additive: earlier migrations are unchanged)
+
+Written as revision 0004 on the Phase 3 branch and renumbered to 0009 when Phase 3 was integrated with Phase 4
+(whose 0004-0008 came first on main), so the chain stays linear. The schema below is unchanged.
 
 Six user-owned tables: backtest_runs and five result tables that reference their run (run_id) and carry its owner
 (user_id); the insert trigger accepts a result row only for a RUNNING run with the same owner. Immutability is enforced by triggers:
@@ -12,16 +15,16 @@ Six user-owned tables: backtest_runs and five result tables that reference their
 At most one QUEUED/RUNNING run per user (partial unique index). The downgrade refuses while any run exists, since it
 would discard backtest history.
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: 0009
+Revises: 0008
 Create Date: 2026-11-11 18:05:34.160946
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = '0004'
-down_revision = '0003'
+revision = '0009'
+down_revision = '0008'
 branch_labels = None
 depends_on = None
 
@@ -244,7 +247,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Dropping these tables would discard every user's backtest history. Refuse rather than lose it.
     if op.get_bind().execute(sa.text("SELECT EXISTS (SELECT 1 FROM backtest_runs)")).scalar():
-        raise RuntimeError("cannot downgrade 0004: backtest runs would be discarded")
+        raise RuntimeError("cannot downgrade 0009: backtest runs would be discarded")
     for table in RESULT_TABLES:
         op.execute(f"DROP TRIGGER trg_{table}_insert ON {table}")
         op.execute(f"DROP TRIGGER trg_{table}_immutable ON {table}")

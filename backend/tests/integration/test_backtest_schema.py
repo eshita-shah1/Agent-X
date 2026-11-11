@@ -1,4 +1,4 @@
-"""Migration 0004: immutability triggers, one active run per user, exact NUMERIC storage and the downgrade guard."""
+"""Migration 0009: immutability triggers, one active run per user, exact NUMERIC storage and the downgrade guard."""
 
 import uuid
 from datetime import UTC, date, datetime
@@ -130,11 +130,11 @@ def test_decimals_are_stored_exactly(db):
     assert db.get(BacktestRun, r.id).capital == exact
 
 
-def test_downgrading_0004_is_refused_while_runs_exist(engine, db):
+def test_downgrading_0009_is_refused_while_runs_exist(engine, db):
     run(db, user(db))
-    with pytest.raises(RuntimeError, match="0004"):
+    with pytest.raises(RuntimeError, match="cannot downgrade 0009"):
         with engine.begin() as conn:
-            command.downgrade(alembic_config(conn), "0003")
+            command.downgrade(alembic_config(conn), "0008")
     with engine.connect() as conn:
-        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0004"
+        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0009"
         assert conn.execute(text("select count(*) from backtest_runs")).scalar() == 1
