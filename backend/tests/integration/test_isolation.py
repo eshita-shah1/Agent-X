@@ -95,7 +95,17 @@ GLOBAL_TABLES = {
 }
 # data_ingestion_jobs has a nullable requested_by_user_id; the API only ever shows a user their own jobs.
 SYSTEM_TABLES = {"users", "audit_events", "data_ingestion_jobs"}
-USER_OWNED_TABLES = {"virtual_accounts"}
+USER_OWNED_TABLES = {
+    "virtual_accounts",
+    # Phase 4: every risk, order and accounting record belongs to exactly one user.
+    "risk_settings",
+    "risk_state",
+    "orders",
+    "fills",
+    "cash_ledger",
+    "positions",
+    "risk_decisions",
+}
 
 
 def test_every_table_is_classified():
