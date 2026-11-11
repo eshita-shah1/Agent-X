@@ -1,0 +1,18 @@
+Agent-X staging isolation checks, 2026-11-12T00:48:09+05:30
+== expected ALLOWED
+staging role on agentx_staging (identity): ALLOWED -> [('agentx_staging_app', 'agentx_staging', False, False, False, False, False)]
+staging role owns every staging table: ALLOWED -> [(33, 33)]
+staging database ACL: ALLOWED -> [('{agentx_staging_app=CTc/agentx_staging_app}',)]
+== expected REFUSED
+staging role reads development candles: REFUSED -> InsufficientPrivilege: permission denied for table candles
+staging role reads development users: REFUSED -> InsufficientPrivilege: permission denied for table users
+staging role reads test database orders: REFUSED -> InsufficientPrivilege: permission denied for table orders
+staging role creates a database: REFUSED -> InsufficientPrivilege: permission denied to create database
+staging role creates a role: REFUSED -> InsufficientPrivilege: permission denied to create role
+development role connects to staging: REFUSED -> OperationalError: connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  permission denied for databa
+== synthetic schedule guard (real .env, real schedule file)
+schedule sha256: 0c7711e6e0c2009674aabaabb488abc0e7e3982972f45ec00d95e09b5a6d0977
+development settings with synthetic schedule: REFUSED -> True
+env-only staging imitation (staging DB name + STAGING-ONLY ref): REFUSED -> True
+staging validator settings on agentx_staging: ACCEPTED | reference STAGING-ONLY:AGENTX-MOCK-EXCHANGE-VALIDATION-001
+development .env unchanged: execution_mode = disabled
