@@ -1,4 +1,4 @@
-# Agent-X Backend — API (Phases 1-4)
+# Agent-X Backend — API (Phases 1-5)
 
 Base path `/api/v1`. Interactive docs at `/docs` (OpenAPI at `/openapi.json`).
 Authenticated endpoints need `Authorization: Bearer <access_token>`.
@@ -219,6 +219,34 @@ corporate-action records; each affected user's result is computed and recorded s
 }
 ```
 Percentages are in (0, 100]. `max_position_quantity` must be sent explicitly (`null` = no share-count cap).
+Returns **409 `AGENT_RUNNING`** while the account's agent is RUNNING (Phase 5): pause or stop it first.
+
+## Phase 5: agent (`/api/v1/agent`; design in [PHASE5.md](PHASE5.md))
+
+Paper trading only. The agent places orders only through the worker (`python -m app.agent.cli cycle`) and
+`OrderService`; no endpoint here places an order. Another user's agent is never visible. Transitions run under the
+account lock, are recorded as agent events and return the **persisted** status read back after commit.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/agent/status` | `configured`, `status` (STOPPED/RUNNING/PAUSED/ERROR), `mode` (EXECUTION/SIGNALS_ONLY), `entries_allowed`, `blockers` (e.g. `EXECUTION_DISABLED`, `KILL_SWITCH_ENGAGED`, `WORKER_NOT_SEEN`, `INSTRUMENT_MANUAL_INTERVENTION`), `disclosures`, `effective_config`, `pending_config`, `instruments[]` (watermark, owed exit, block), heartbeat, `unresolved_protective_exits` |
+| GET | `/agent/config` | Latest configuration version; `404` until configured |
+| PUT | `/agent/config` | Creates the agent (STOPPED) on first use and a new immutable version: `201`; identical to the latest: `200`, `created: false`. `409` while RUNNING. `422` for an invalid strategy, parameter, policy or instrument (only enabled equities). A new version is effective from the next session (immediately before the first start) |
+| POST | `/agent/start` | STOPPED → RUNNING after validation and reconciliation. The mode is EXECUTION when `/exchange/status` reports execution enabled, otherwise SIGNALS_ONLY (no order is ever submitted). `409 AGENT_REFUSED: ...` lists every problem |
+| POST | `/agent/pause` | RUNNING → PAUSED (monitor mode: no entries; exits continue) |
+| POST | `/agent/resume` | PAUSED/ERROR → RUNNING after revalidation (same mode) and reconciliation; refused while the kill switch is engaged |
+| POST | `/agent/stop` | → STOPPED. Nothing is liquidated; Phase 4 protective exits keep running |
+| POST | `/agent/kill-switch` | Body `{"reason": "..."}`. Engages the **Phase 4** kill switch (cancels every open order) and pauses the agent. Release with `POST /risk/kill-switch`; the agent stays PAUSED until `/agent/resume` |
+| GET | `/agent/decisions` | Newest first; filters `instrument_id`, `kind` (SELECTION/EVALUATION/OWED_EXIT), `outcome`, `before_id`, `limit` ≤ 500. Each carries the candle id, observation version, provider, price basis, strategy, signal, outcome, and the client order id / order / risk decision it produced |
+| GET | `/agent/events` | Lifecycle, kill switch, reconciliation, instrument blocks, owed exits, cycle failures |
+| GET | `/agent/cycles` | Worker cycles with status (RUNNING/SUCCEEDED/FAILED/INTERRUPTED) and summary |
+
+`PUT /agent/config` body (the backtest candidate shape):
+```json
+{"instrument_ids": [1, 2], "mode": "REGIME_PRIORITY", "warmup_sessions": 2,
+ "candidates": [{"config_id": "orb", "strategy_id": "ORB", "params": {}, "priority": 1},
+                {"config_id": "rsi", "strategy_id": "RSI_BOLLINGER", "params": {}, "priority": 2}]}
+```
 
 ## Errors
 Errors use FastAPI's default `{"detail": ...}` shape; some errors carry a structured detail `{"code": ..., "message":
@@ -226,4 +254,4 @@ Errors use FastAPI's default `{"detail": ...}` shape; some errors carry a struct
 `PROVIDER_NOT_CONFIGURED`) and backtests (see above). `401` responses carry `WWW-Authenticate: Bearer`.
 
 ## Not yet available
-Agent orchestration, journal, LLM explanations and reports arrive in later phases.
+The LLM journal, explanations and reports arrive in Phase 7.

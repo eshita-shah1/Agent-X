@@ -1,11 +1,12 @@
-# Agent-X Backend — Architecture (Phases 1-4)
+# Agent-X Backend — Architecture (Phases 1-5)
 
 Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 is the foundation (auth,
 isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)); Phase 3 adds
 indicators, strategies, regime-based selection, the backtesting engine and the Buy-and-Hold benchmark (see
 [BACKTESTING.md](BACKTESTING.md)); Phase 4 adds the risk engine, the Mock Exchange, simulation-only execution, cost
-schedules, corporate-action adjustments, dividends and the operator role (see [PHASE4.md](PHASE4.md)). The agent, live
-trading, broker integration and LLM features are **not implemented**.
+schedules, corporate-action adjustments, dividends and the operator role (see [PHASE4.md](PHASE4.md)); Phase 5 adds the
+autonomous paper-trading agent that orchestrates them (see [PHASE5.md](PHASE5.md)). Live trading, broker integration
+and LLM features are **not implemented**.
 
 ## Layout
 
@@ -29,7 +30,7 @@ backend/
     backtest_runs/     read-only data loader, background runs, atomic persistence
     exchange/, risk/, orders/, ops/   Phase 4 (see below)
     api/v1/            auth, account, market, trading, operator, backtests routers; deps; schemas
-  alembic/             migrations 0001-0009 (see "Migration chain")
+  alembic/             migrations 0001-0012 (see "Migration chain")
   tests/               unit/, marketdata/, indicators/, strategies/, backtest/ (pure, no DB),
                        integration/ (real PostgreSQL); support.py (fake provider/clock)
 ```
@@ -120,7 +121,7 @@ Summary of what changed in the foundation:
 
 ## Migration chain
 
-One linear chain with a single head (`alembic heads` → `0009`):
+One linear chain with a single head (`alembic heads` → `0012`):
 
 | Revision | Purpose | Phase |
 |---|---|---|
@@ -133,6 +134,9 @@ One linear chain with a single head (`alembic heads` → `0009`):
 | `0007` | Corporate-action adjustments, cost schedule fields, order product | 4 |
 | `0008` | Operator role, dividend credits, cash-in-lieu provenance | 4 |
 | `0009` | Backtest runs and results | 3 |
+| `0010` | Execution approval reference on orders and fills | 4 |
+| `0011` | Protective-exit requirements (stale prices) | 4 |
+| `0012` | Agent orchestration: instances, configuration versions, cycles, decisions, events, instrument state | 5 |
 
 Phases 3 and 4 were developed in parallel, and Phase 4 reached `main` first. The Phase 3 migration was written as `0004`
 and renumbered to `0009` (parent `0008`) at integration. Its schema is unchanged, and `0001`-`0008` are unchanged.
@@ -173,9 +177,27 @@ Full design and limitations: [BACKTESTING.md](BACKTESTING.md).
 - **Time zones.** The engine normalises every bar timestamp to UTC and serialises explanations in UTC. Session logic stays in Asia/Kolkata. Results are therefore identical whatever zone the inputs, or the database session, used.
 - **Separate from Phase 4 execution.** No Phase 3 module imports the risk engine, Mock Exchange, order pipeline or operations code, and no Phase 4 execution module imports the backtest. A backtest never writes orders, fills, ledger entries or positions, and runs with execution disabled. The two simulation models differ by design, and are kept separate by decision ([BACKTESTING.md](BACKTESTING.md) §9).
 
+## Phase 5: agent orchestration
+
+Full design: [PHASE5.md](PHASE5.md).
+
+- **Package `app/agent`** (configuration, lifecycle, positions, replay, pipeline, cycle, cli, guards) plus
+  `api/v1/agent.py` and `api/v1/schemas_agent.py`. The agent orchestrates existing services:
+  `MarketDataService` → the approved selector and strategies (deterministic replay) → `OrderService.submit` → Phase 4
+  risk engine → Mock Exchange. It writes only its own six tables (migration `0012`).
+- **Dependency direction.** Nothing below the API imports `app.agent`. The one exception, by design, is
+  `api/v1/trading.py`, which calls `app.agent.guards` for the risk-settings lock. The agent imports no backtest,
+  provider, scheduler, thread, network, LLM or broker code, and none of the Phase 4 formula modules (risk engine, costs,
+  accounting, pricing, portfolio). `tests/agent/test_boundaries.py` enforces this.
+- **Shared, not copied.** `app/strategies/configs.py` (D13) holds the JSON → configuration/policy builder and the
+  corporate-action warm-up rule used by both the backtest runner and the agent. `app/exchange/readiness.py` holds the
+  execution-readiness check used by `GET /exchange/status` and by the agent's mode decision.
+- **No in-app scheduling.** The worker is a one-shot CLI run by an external scheduler; the Phase 2 guard against threads
+  and schedulers still applies to every module.
+
 ## What is deliberately not here
 
-- Risk configuration now exists as `risk_settings` (Phase 4) with **no defaults**: entries are rejected until the user saves every limit. Edit rules that depend on agent state (for example, locking settings while the agent runs) remain for Phase 5.
+- Risk configuration now exists as `risk_settings` (Phase 4) with **no defaults**: entries are rejected until the user saves every limit. Since Phase 5 the settings cannot change while the account's agent is RUNNING (`409 AGENT_RUNNING`).
 - `futures_contract`: futures stay disabled until genuine contract-specific data exists. `InstrumentType.FUTURE` exists only so the instrument model need not change later.
 - Tick/lot sizes: none are invented. Phase 2 seeds the 10 equities and the provider, but `tick_size`/`lot_size` stay `null` until an authoritative instrument-specific source is approved.
 - A scheduler: ingestion is operator-initiated (approved for Phase 2), and backtests start only on an explicit request.
