@@ -2,6 +2,7 @@
 
 import time
 
+import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
@@ -36,6 +37,9 @@ def test_readiness_reports_503_when_database_is_unreachable(test_settings):
         assert "password" not in resp.text.lower()
 
 
+# Migration 0008 adds three CHECK constraints NOT VALID on purpose (they bind new rows without re-validating
+# history). SQLAlchemy cannot round-trip that option when reflecting and warns; the comparison itself is unaffected.
+@pytest.mark.filterwarnings("ignore:Can't validate argument 'dialect_options':sqlalchemy.exc.SAWarning")
 def test_migrations_round_trip_and_match_the_models(engine):
     """downgrade -> upgrade works, and the migrated schema has no drift from the ORM models."""
     with engine.begin() as conn:
