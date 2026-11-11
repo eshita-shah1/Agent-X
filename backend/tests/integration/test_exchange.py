@@ -801,7 +801,8 @@ def _version(engine):
 
 def test_downgrading_0005_is_refused_while_orders_exist(env, engine):
     _filled(env)
-    with pytest.raises(RuntimeError, match="cannot downgrade 0008"):
+    # The newest revision holding execution records refuses first (0010 since the approval references were added).
+    with pytest.raises(RuntimeError, match="cannot downgrade 00(08|10)"):
         _downgrade(engine, "0004")
     assert _version(engine) == _head()  # nothing was undone
     with engine.connect() as conn:

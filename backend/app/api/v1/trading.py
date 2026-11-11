@@ -28,6 +28,8 @@ from app.api.v1.trading_schemas import (
     PendingAdjustmentResponse,
     PositionResponse,
     ProcessResponse,
+    ProtectiveExitRequirementResponse,
+    ProtectiveExitRunResponse,
     RiskDecisionResponse,
     RiskSettingsRequest,
     RiskSettingsResponse,
@@ -36,7 +38,16 @@ from app.api.v1.trading_schemas import (
 from app.core.clock import Clock, utc_now
 from app.core.config import Settings
 from app.db.enums import EXECUTION_MODE_POLICY, AdjustmentStatus, OrderSource, OrderStatus
-from app.db.models import CorporateActionAdjustment, DividendCredit, Fill, Order, Position, RiskDecision, User
+from app.db.models import (
+    CorporateActionAdjustment,
+    DividendCredit,
+    Fill,
+    Order,
+    Position,
+    ProtectiveExitRequirement,
+    RiskDecision,
+    User,
+)
 from app.db.scoping import owned_select
 from app.exchange.corporate_actions import CorporateActionService
 from app.exchange.costs import CostScheduleError, load_cost_schedule
@@ -165,6 +176,7 @@ def get_portfolio(user: User = Depends(get_current_user), ctx: TradingContext = 
     valuation = ctx.portfolio.valuation(account)
     every_position = list(ctx.db.scalars(owned_select(Position, user.id).order_by(Position.instrument_id)))
     marks = {v.position.id: v for v in valuation.positions}
+    unresolved = {r.position_id for r in _open_requirements(ctx.db, user.id)}
     positions = []
     for p in every_position:
         v = marks.get(p.id)
@@ -186,6 +198,7 @@ def get_portfolio(user: User = Depends(get_current_user), ctx: TradingContext = 
                     if v is None or v.price_check.ok
                     else f"{v.price_check.rejection.value}: {v.price_check.detail}"
                 ),
+                protective_exit_unresolved=p.id in unresolved,
             )
         )
     complete = not valuation.unmarked_instrument_ids
@@ -250,10 +263,18 @@ def get_risk_state(user: User = Depends(get_current_user), ctx: TradingContext =
     account = lock_account(ctx.db, user.id)
     status_ = ctx.risk.refresh(account)
     ctx.db.commit()
-    return _risk_response(status_)
+    return _risk_response(status_, ctx.db, user.id)
 
 
-def _risk_response(s: RiskStatus) -> RiskStateResponse:
+def _open_requirements(db: Session, user_id) -> list[ProtectiveExitRequirement]:
+    return list(db.scalars(
+        owned_select(ProtectiveExitRequirement, user_id)
+        .where(ProtectiveExitRequirement.status == "OPEN")
+        .order_by(ProtectiveExitRequirement.detected_at, ProtectiveExitRequirement.id)
+    ))
+
+
+def _risk_response(s: RiskStatus, db: Session | None = None, user_id=None) -> RiskStateResponse:
     st = s.state
     return RiskStateResponse(
         kill_switch_engaged=st.kill_switch_engaged,
@@ -268,6 +289,7 @@ def _risk_response(s: RiskStatus) -> RiskStateResponse:
         drawdown_pct=s.drawdown_pct.quantize(Decimal("0.0001")) if s.drawdown_pct is not None else None,
         daily_loss_pct=s.daily_loss_pct.quantize(Decimal("0.0001")) if s.daily_loss_pct is not None else None,
         breaches=s.breaches,
+        unresolved_protective_exits=len(_open_requirements(db, user_id)) if db is not None else 0,
     )
 
 
@@ -279,7 +301,21 @@ def set_kill_switch(
     ctx.risk.set_kill_switch(account, body.engaged, body.reason, ctx.exchange)
     status_ = ctx.risk.refresh(account)
     ctx.db.commit()
-    return _risk_response(status_)
+    return _risk_response(status_, ctx.db, user.id)
+
+
+@router.get("/risk/protective-exits", response_model=list[ProtectiveExitRequirementResponse])
+def list_protective_exit_requirements(
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(OPEN|RESOLVED)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ProtectiveExitRequirement]:
+    """The caller's protective-exit requirements: positions whose stop/target could not be evaluated on fresh data."""
+    q = owned_select(ProtectiveExitRequirement, user.id)
+    if status_filter:
+        q = q.where(ProtectiveExitRequirement.status == status_filter)
+    return list(db.scalars(q.order_by(ProtectiveExitRequirement.detected_at.desc(), ProtectiveExitRequirement.id.desc()).limit(limit)))
 
 
 @router.get("/risk/decisions", response_model=list[RiskDecisionResponse])
@@ -354,7 +390,24 @@ def process_orders(user: User = Depends(get_current_user), ctx: TradingContext =
     status_ = ctx.risk.refresh(account)
     ctx.db.commit()
     return ProcessResponse(
-        changed_orders=[OrderResponse.model_validate(o) for o in changed], risk=_risk_response(status_)
+        changed_orders=[OrderResponse.model_validate(o) for o in changed], risk=_risk_response(status_, ctx.db, user.id)
+    )
+
+
+@router.post("/exchange/protective-exits", response_model=ProtectiveExitRunResponse)
+def run_protective_exits(user: User = Depends(get_current_user), ctx: TradingContext = Depends(get_trading)):
+    """Evaluate the caller's stop-losses and take-profits on the latest eligible prices and submit MARKET exits where
+    triggered. Positions without a fresh eligible price get an OPEN protective-exit requirement (and an alert) instead
+    of a silent skip; a later run on fresh data resolves it. Explicitly triggered (no scheduler); Phase 5 will call the
+    same service each cycle."""
+    results = OrderService(ctx).run_protective_exits(user.id)
+    account = lock_account(ctx.db, user.id)
+    status_ = ctx.risk.refresh(account)
+    ctx.db.commit()
+    return ProtectiveExitRunResponse(
+        submitted_exits=[OrderResponse.model_validate(r.order) for r in results],
+        unresolved=[ProtectiveExitRequirementResponse.model_validate(r) for r in _open_requirements(ctx.db, user.id)],
+        risk=_risk_response(status_, ctx.db, user.id),
     )
 
 

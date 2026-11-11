@@ -171,14 +171,18 @@ class MockExchange:
     def __init__(
         self, db: Session, gate: ExecutionPriceGate, cost_schedule: CostSchedule | None, clock: Clock,
         timeframe_minutes: int = 5, execution_policy: ExecutionPolicy | None = None,
-        max_volume_participation: Decimal | None = None,
+        max_volume_participation: Decimal | None = None, approval_reference: str | None = None,
     ):
+        if execution_policy is not None and not (approval_reference or "").strip():
+            raise ValueError("an execution policy requires its approval reference (EXECUTION_APPROVAL_REFERENCE)")
         self.db = db
         self.gate = gate
         self.cost_schedule = cost_schedule
         self.clock = clock
         self.timeframe_minutes = timeframe_minutes
         self.execution_policy = execution_policy  # None while execution is disabled
+        # Stamped on every order accepted under the policy and copied to its fills (migration 0010).
+        self.approval_reference = approval_reference if execution_policy is not None else None
         self.max_volume_participation = max_volume_participation
         self.portfolio = PortfolioReader(db, gate)
         self._cost_cache: dict[tuple[Product, date], CostModel] = {}
@@ -325,6 +329,14 @@ class MockExchange:
                     "EXECUTION_MODE_CHANGED: accepted under "
                     f"{order.execution_policy.value if order.execution_policy else None}, active policy is "
                     f"{self.execution_policy.value if self.execution_policy else None}",
+                )
+                continue
+            if order.execution_approval_reference != self.approval_reference:
+                # Same mode, different approval: the order is never filled under an approval it was not accepted with.
+                self._close_open_order(
+                    order,
+                    f"EXECUTION_APPROVAL_CHANGED: accepted under {order.execution_approval_reference!r}, "
+                    f"active approval is {self.approval_reference!r}",
                 )
                 continue
             if self.cost_schedule is None:
@@ -507,6 +519,7 @@ class MockExchange:
             provider_code=bar.provider_code,
             price_basis=bar.price_basis,
             execution_policy=order.execution_policy,
+            execution_approval_reference=order.execution_approval_reference,  # immutable, from acceptance
             price_as_of=fill.as_of,  # simulated fill time
             price_observed_at=bar.observed_at,  # when the finalized candle became available to Agent-X
             cost_model=costs.snapshot(),
@@ -609,6 +622,7 @@ class MockExchange:
             signal_at=intent.signal_at or now,
             decision_price_ref=decision_price_ref,
             execution_policy=self.execution_policy,
+            execution_approval_reference=self.approval_reference,
             product=intent.product,
         )
 

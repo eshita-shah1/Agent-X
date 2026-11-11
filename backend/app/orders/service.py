@@ -22,8 +22,8 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import Clock
 from app.core.config import Settings
-from app.db.enums import EXECUTION_MODE_POLICY, OrderSide, OrderSource, OrderType
-from app.db.models import Instrument, Order, RiskDecision, VirtualAccount
+from app.db.enums import EXECUTION_MODE_POLICY, OrderSide, OrderSource, OrderStatus, OrderType
+from app.db.models import AuditEvent, Instrument, Order, ProtectiveExitRequirement, RiskDecision, VirtualAccount
 from app.db.scoping import owned_select
 from app.exchange.costs import CostModel, CostSchedule, CostScheduleError, load_cost_schedule
 from app.exchange.portfolio import PortfolioReader
@@ -35,6 +35,18 @@ from app.risk.engine import RiskResult, TradeProposal, evaluate
 from app.risk.service import RiskService
 
 log = logging.getLogger("agentx.orders")
+
+
+def _protective_trigger(pos, quote) -> str | None:
+    """'SL' / 'TP' when the bar's range traded through the position's level (stop first), else None. The exit is a
+    MARKET order that fills at the next bar's open; gaps are never filled at the stop price."""
+    low = quote.low if quote.low is not None else quote.price
+    high = quote.high if quote.high is not None else quote.price
+    if pos.stop_loss_price is not None and low <= pos.stop_loss_price:
+        return "SL"
+    if pos.take_profit_price is not None and high >= pos.take_profit_price:
+        return "TP"
+    return None
 
 
 class IdempotencyConflict(ValueError):
@@ -94,6 +106,7 @@ class TradingContext:
             if not settings.execution_config_problems(session_date_of(clock()))
             else None,
             max_volume_participation=settings.exchange_max_volume_participation,
+            approval_reference=settings.execution_approval_reference,
         )
         return cls(db, clock, gate, costs, portfolio, exchange, RiskService(db, portfolio, clock), schedule, problem)
 
@@ -182,27 +195,48 @@ class OrderService:
         """Submit MARKET SELL exits for positions whose eligible price has crossed their stop-loss
         or take-profit. Deterministic and idempotent per observation (the client order id is
         derived from the position and the observation). Not scheduled: Phase 5 orchestration
-        decides when to call it."""
+        decides when to call it.
+
+        When no eligible fresh price exists (stale, missing or ineligible data), the evaluation is not dropped: an OPEN
+        `ProtectiveExitRequirement` is recorded (one per position), an audit alert is raised, and the position is
+        reported as not protected. No exit is triggered from stale data and no price is fabricated. The next run with
+        a fresh eligible price resolves it under the same rule; a crossing already observed on the stale bar is not
+        forgotten, so that crossing triggers the exit on recovery even if the fresh bar has moved back."""
         account = lock_account(self.db, user_id)
+        now = self.ctx.clock()
         results = []
-        for pos in self.ctx.portfolio.open_positions(user_id):
+        open_reqs = {
+            r.position_id: r
+            for r in self.db.scalars(
+                owned_select(ProtectiveExitRequirement, user_id)
+                .where(ProtectiveExitRequirement.status == "OPEN")
+                .with_for_update()
+            )
+        }
+        positions = self.ctx.portfolio.open_positions(user_id)
+        held = {p.id for p in positions}
+        for position_id, req in open_reqs.items():
+            if position_id not in held:
+                self._resolve_requirement(req, now, "POSITION_CLOSED")
+        for pos in positions:
+            if pos.stop_loss_price is None and pos.take_profit_price is None:
+                continue
+            req = open_reqs.get(pos.id)
             check = self.ctx.gate.check(pos.instrument_id)
             if not check.ok or check.quote is None:
+                self._record_unevaluated(account, pos, check, req, now)
                 continue
-            q = check.quote
-            low = q.low if q.low is not None else q.price
-            high = q.high if q.high is not None else q.price
-            trigger = None
-            # Triggered when the latest finalized bar traded through the level; the exit is a MARKET order that
-            # fills at the next bar's open (gaps are not filled at the stop price).
-            if pos.stop_loss_price is not None and low <= pos.stop_loss_price:
-                trigger = "SL"
-            elif pos.take_profit_price is not None and high >= pos.take_profit_price:
-                trigger = "TP"
+            trigger = _protective_trigger(pos, check.quote)
+            if trigger is None and req is not None and req.stale_trigger:
+                trigger = req.stale_trigger  # observed on the stale bar: still owed
             if trigger is None:
+                if req is not None:
+                    self._resolve_requirement(req, now, "NOT_TRIGGERED")
                 continue
             sellable = self.ctx.risk.snapshot(account, pos.instrument_id).sellable_quantity
-            if sellable <= 0:
+            if sellable <= 0:  # an exit for the whole position is already resting
+                if req is not None:
+                    self._resolve_requirement(req, now, "EXIT_ALREADY_PENDING")
                 continue
             intent = OrderIntent(
                 client_order_id=f"{trigger}-{pos.id}-{check.quote.source_ref}"[:64],
@@ -213,8 +247,66 @@ class OrderService:
                 source=OrderSource.RISK_EXIT,
                 signal_at=check.quote.as_of,  # the bar whose range triggered the exit
             )
-            results.append(self.submit(user_id, intent))
+            result = self.submit(user_id, intent)
+            results.append(result)
+            if req is not None:
+                if result.order.status in (OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED):
+                    self._resolve_requirement(req, now, "EXIT_SUBMITTED", exit_order_id=result.order.id)
+                else:  # the exit itself was refused (e.g. a frozen position): the requirement stays open
+                    req.last_checked_at = now
+                    req.checks += 1
+                    req.detail = f"exit refused: {result.order.reject_reason}"
+        self.db.flush()
         return results
+
+    def _record_unevaluated(self, account: VirtualAccount, pos, check, req, now) -> None:
+        stale_trigger = _protective_trigger(pos, check.quote) if check.quote is not None else None
+        reason = check.rejection.value if check.rejection else "NO_DATA"
+        if req is None:
+            req = ProtectiveExitRequirement(
+                user_id=account.user_id, account_id=account.id, position_id=pos.id, instrument_id=pos.instrument_id,
+                status="OPEN", reason_code=reason, detail=check.detail, stale_trigger=stale_trigger,
+                quote_ref=check.quote.source_ref if check.quote else None,
+                quote_as_of=check.quote.as_of if check.quote else None,
+                stop_loss_price=pos.stop_loss_price, take_profit_price=pos.take_profit_price,
+                detected_at=now, last_checked_at=now, checks=1,
+            )
+            self.db.add(req)
+            self.db.flush()
+            self.db.add(AuditEvent(
+                user_id=account.user_id, event_type="risk.protective_exit_unresolved",
+                details={
+                    "requirement_id": req.id, "position_id": pos.id, "instrument_id": pos.instrument_id,
+                    "reason": reason, "detail": check.detail, "stale_trigger": stale_trigger,
+                    "quote_ref": req.quote_ref, "detected_at": now.isoformat(),
+                },
+            ))
+            log.error(
+                "protective exit unresolved: no eligible fresh price",
+                extra={"fields": {"user_id": str(account.user_id), "position_id": pos.id, "requirement_id": req.id,
+                                  "reason": reason, "stale_trigger": stale_trigger}},
+            )
+            return
+        req.last_checked_at = now
+        req.checks += 1
+        req.detail = check.detail
+        if stale_trigger and not req.stale_trigger:
+            req.stale_trigger = stale_trigger
+            req.quote_ref = check.quote.source_ref
+            req.quote_as_of = check.quote.as_of
+
+    def _resolve_requirement(self, req, now, resolution: str, exit_order_id=None) -> None:
+        req.status = "RESOLVED"
+        req.resolution = resolution
+        req.resolved_at = now
+        req.last_checked_at = now
+        req.exit_order_id = exit_order_id
+        self.db.flush()
+        self.db.add(AuditEvent(
+            user_id=req.user_id, event_type="risk.protective_exit_resolved",
+            details={"requirement_id": req.id, "position_id": req.position_id, "resolution": resolution,
+                     "exit_order_id": str(exit_order_id) if exit_order_id else None, "resolved_at": now.isoformat()},
+        ))
 
     def _log_decision(
         self,

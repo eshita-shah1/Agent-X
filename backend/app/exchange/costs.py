@@ -45,6 +45,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.db.enums import OrderSide, Product
 
+# A schedule whose version or description contains this marker holds made-up rates for staging validation only;
+# `Settings.execution_config_problems` refuses it outside the staging validator.
+SYNTHETIC_STAGING_MARKER = "SYNTHETIC_STAGING_ONLY"
+
 PRICE_QUANTUM = Decimal("0.000001")
 MONEY_QUANTUM = Decimal("0.000001")
 BPS_DIVISOR = Decimal(10000)
@@ -476,6 +480,12 @@ class CostSchedule:
     @property
     def version(self) -> str:
         return self.file.schedule_version
+
+    @property
+    def is_synthetic_staging_only(self) -> bool:
+        return SYNTHETIC_STAGING_MARKER in self.file.schedule_version or SYNTHETIC_STAGING_MARKER in (
+            self.file.description or ""
+        )
 
     def problems(self, product: Product, on_date: date) -> list[str]:
         problems = []

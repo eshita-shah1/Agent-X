@@ -44,19 +44,25 @@ macOS / Linux (cron, IST machine clock): every 5 minutes during the session, plu
 40 15 * * 1-5     cd /path/Agent-X/backend && ../.venv/bin/python -m app.ops.cli daily --report-dir ../data/ingestion_reports >> ../data/ingestion.log 2>&1
 ```
 
-Windows (Task Scheduler, PowerShell):
+Windows (Task Scheduler): the approved 5-minute cadence is packaged in the repository.
 ```powershell
-$action  = New-ScheduledTaskAction -Execute "C:\path\Agent-X\.venv\Scripts\python.exe" `
-           -Argument "-m app.ops.cli daily --report-dir ..\data\ingestion_reports" -WorkingDirectory "C:\path\Agent-X\backend"
-$trigger = New-ScheduledTaskTrigger -Once -At 09:20 -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Hours 6 -Minutes 20)
-Register-ScheduledTask -TaskName "AgentX-Ingestion" -Action $action -Trigger $trigger
+# one ingestion run (refuses outside Mon-Fri 09:15-15:40 IST; -IgnoreMarketHours for a manual test only)
+powershell -ExecutionPolicy Bypass -File scripts\windows\ingest_intraday.ps1
+# register "AgentX-Intraday-Ingestion": every 5 minutes, Mon-Fri 09:15-15:40, current user (machine on IST)
+powershell -ExecutionPolicy Bypass -File scripts\windows\register_ingestion_task.ps1
+# remove it
+Unregister-ScheduledTask -TaskName "AgentX-Intraday-Ingestion" -Confirm:$false
 ```
+`ingest_intraday.ps1` wraps `python -m app.ops.cli daily --coverage-days 1`, appends one line per run to
+`data\ingestion.log` (failures with the tail of the output) and keeps each JSON report in `data\ingestion_reports\`.
+It never creates, edits or back-dates candles: every bar keeps Yahoo's timestamps and its real `observed_at`.
+Run-tested on the Windows integration machine on 2026-11-11 (SKIPPED outside hours; manual run SUCCEEDED).
 - The cadence is an operational decision (§2).
 - Overlapping runs are refused (exit 3), so a short interval is safe.
 
 ## 2. Latency and the staleness threshold (B7)
 
-`EXECUTION_MAX_PRICE_AGE_SECONDS` (provisional 900 s) is the maximum age of the reference bar at decision time.
+`EXECUTION_MAX_PRICE_AGE_SECONDS` (900 s: the B7 development decision of 2026-11-11, paired with a 5-minute ingestion cadence; still to be confirmed by the measurement below) is the maximum age of the reference bar at decision time.
 - A bar is only usable once Agent-X has archived it.
 - So the age at decision is at least: Yahoo's publication delay + the finalisation margin (60 s, provisional) + the
   time until the next ingestion run.
@@ -82,6 +88,17 @@ ingestion (§1) or an explicitly approved, larger threshold.
   log (`risk_decisions.price_check`).
 - No threshold or slippage value is presented as empirically validated until the procedure above has been run and
   approved.
+
+**Freshness check** (read-only): `python -m app.ops.cli freshness --min-run 8` reports, per instrument, the longest run
+of contiguous bars recorded within `EXECUTION_MAX_PRICE_AGE_SECONDS` of their close (exit 0 if some run reaches
+`--min-run`, else 2). The staging validator needs such a run; on 2026-11-12 00:00 IST the best run was 3.
+
+### Protective-exit alerts (migration 0011)
+When a protective-exit run cannot evaluate a position's stop/target (stale or ineligible price), an OPEN requirement
+and an audit event `risk.protective_exit_unresolved` are recorded. Operators review them with
+`GET /api/v1/operator/protective-exits/unresolved`. They resolve on the first protective-exit run with a fresh eligible
+price (an exit is submitted if the level was crossed, including a crossing already seen on the stale bar). A
+requirement that stays open usually means ingestion has stopped: check `data\ingestion.log` and `ops freshness`.
 
 ## 3. Operators
 
