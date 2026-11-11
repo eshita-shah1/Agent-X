@@ -4,7 +4,11 @@
     python -m app.ops.cli latency [--days 30]
     python -m app.ops.cli set-operator --email EMAIL (--on | --off)
     python -m app.ops.cli check-contract-note NOTE.json [--schedule SCHEDULE.json]
+    python -m app.ops.cli freshness [--min-run 8]          (read-only; exit 0 if a fresh run of that length exists, else 2)
     python -m app.ops.cli staging-validate --staging-db NAME_staging --schedule SCHEDULE.json --approval-reference REF
+    python -m app.ops.cli staging-serve --staging-db NAME_staging --schedule SCHEDULE.json --approval-reference REF
+        [--port 8020] [--replay-from 2026-11-12T04:00:00+00:00]   (127.0.0.1 only; simulation in that process only)
+    python -m app.ops.cli staging-lifecycle --staging-db NAME_staging --schedule SCHEDULE.json --approval-reference REF
 
 Scheduling (owner decision B6): Agent-X never schedules itself (Phase 2 decision 5). `daily` is a one-shot, idempotent
 command meant to be run by an external scheduler (cron, launchd, Windows Task Scheduler): see docs/OPERATIONS.md.
@@ -162,11 +166,24 @@ def main(argv: list[str] | None = None) -> int:
     cn = sub.add_parser("check-contract-note")
     cn.add_argument("note", type=Path)
     cn.add_argument("--schedule", type=Path, default=None)
+    fr = sub.add_parser("freshness", help="read-only: longest run of bars recorded within the price-age limit")
+    fr.add_argument("--min-run", type=int, default=8)
     st = sub.add_parser("staging-validate")
     st.add_argument("--staging-db", required=True)
     st.add_argument("--schedule", type=Path, required=True)
     st.add_argument("--approval-reference", required=True)
     st.add_argument("--participation", default=None)
+    sv = sub.add_parser("staging-serve", help="API on the staging copy, simulation enabled in this process only")
+    sv.add_argument("--staging-db", required=True)
+    sv.add_argument("--schedule", type=Path, required=True)
+    sv.add_argument("--approval-reference", required=True)
+    sv.add_argument("--participation", default=None)
+    sv.add_argument("--port", type=int, default=8020)
+    sv.add_argument("--replay-from", default=None, help="timezone-aware start of a replay clock (advances in real time)")
+    lc = sub.add_parser("staging-lifecycle", help="scripted API order-lifecycle exercise on the staging copy")
+    lc.add_argument("--staging-db", required=True)
+    lc.add_argument("--schedule", type=Path, required=True)
+    lc.add_argument("--approval-reference", required=True)
     args = ap.parse_args(argv)
 
     if args.cmd == "daily":
@@ -195,6 +212,28 @@ def main(argv: list[str] | None = None) -> int:
         report = evaluate_contract_note(load_cost_schedule(schedule_path), note)
         print(json.dumps(report.as_dict(), indent=2))
         return 0 if report.ok else 1
+    if args.cmd == "freshness":
+        from app.ops.staging import freshness_report, load_series
+
+        settings, factory, _ = _ctx()
+        with factory() as s:
+            provider = s.scalar(select(DataProvider).where(DataProvider.code == settings.marketdata_provider))
+            if provider is None:
+                print(json.dumps({"error": f"provider {settings.marketdata_provider} not registered"}))
+                return 1
+            series = load_series(s, provider.id, settings.execution_candle_timeframe.value)
+            s.rollback()
+        report = freshness_report(series, timedelta(seconds=settings.execution_max_price_age_seconds), args.min_run)
+        print(json.dumps({"database": settings.db_name, **report}, indent=2))
+        return 0 if report["sufficient"] else 2
+    if args.cmd == "staging-lifecycle":
+        from app.ops.staging_lifecycle import lifecycle_main
+
+        return lifecycle_main(args)
+    if args.cmd == "staging-serve":
+        from app.ops.staging import staging_serve_main
+
+        return staging_serve_main(args)
     if args.cmd == "staging-validate":
         from app.ops.staging import staging_main
 

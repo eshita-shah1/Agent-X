@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, PrivateAttr, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    # Set only by `app.ops.staging.staging_settings` on its own in-process copy. A private attribute: no environment
+    # variable, .env entry or constructor argument can set it, so the SYNTHETIC_STAGING_ONLY guard cannot be bypassed
+    # by configuration.
+    _staging_validator_process: bool = PrivateAttr(default=False)
 
     environment: str = "development"
 
@@ -70,8 +75,10 @@ class Settings(BaseSettings):
     execution_approved_price_bases: list[PriceBasis] = Field(default_factory=list)
     execution_approved_providers: list[str] = Field(default_factory=list)
     execution_candle_timeframe: Timeframe = Timeframe.M5  # canonical timeframe per the PRD
-    # PROVISIONAL (PRD section 7.4: 15-minute stale threshold). Applies to the reference price used for
-    # decisions, sizing and marks. Configurable, not a final rule.
+    # B7 development decision (2026-11-11): 15 minutes (PRD section 7.4), paired with a 5-minute ingestion cadence
+    # during market hours. Applies to the reference price used for decisions, sizing, marks and protective-exit
+    # triggers: an older reference refuses new orders (STALE) and is never treated as current. Still to be confirmed
+    # by latency measurement on the integration machine before real-environment enablement (docs/OPERATIONS.md §2).
     execution_max_price_age_seconds: int = Field(default=900, gt=0)
 
     # ---- Phase 4: transaction costs (Indian cash equities; see app/exchange/costs.py) ----------------
@@ -109,16 +116,33 @@ class Settings(BaseSettings):
         if not self.exchange_cost_schedule_path:
             problems.append("EXCHANGE_COST_SCHEDULE_PATH is required to enable execution")
         else:
-            from app.exchange.costs import CostScheduleError, load_cost_schedule
+            from app.exchange.costs import SYNTHETIC_STAGING_MARKER, CostScheduleError, load_cost_schedule
 
             try:
                 schedule = load_cost_schedule(self.exchange_cost_schedule_path)
             except CostScheduleError as e:
                 problems.append(str(e))
             else:
+                if schedule.is_synthetic_staging_only and not self.is_staging_run:
+                    problems.append(
+                        f"cost schedule {schedule.version!r} is {SYNTHETIC_STAGING_MARKER}: it may only be used by the "
+                        "staging validator against a '*_staging' database, never in a development or real environment"
+                    )
                 if on_date is not None:
                     problems.extend(schedule.problems(self.exchange_product, on_date))
         return problems
+
+    @property
+    def is_staging_run(self) -> bool:
+        """True only for the staging validator's own settings (`app.ops.staging.staging_settings`): marked in-process
+        by the validator, on a `*_staging` database other than the test database, with a `STAGING-ONLY:` approval
+        reference. All three are required; configuration alone can satisfy at most the last two."""
+        return (
+            self._staging_validator_process
+            and self.db_name.endswith("_staging")
+            and self.db_name != self.db_test_name
+            and (self.execution_approval_reference or "").startswith("STAGING-ONLY:")
+        )
 
     @model_validator(mode="after")
     def _execution_safeguards(self) -> "Settings":

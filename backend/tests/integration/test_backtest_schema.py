@@ -131,10 +131,13 @@ def test_decimals_are_stored_exactly(db):
 
 
 def test_downgrading_0009_is_refused_while_runs_exist(engine, db):
+    from tests.integration.test_exchange import _head
+
     run(db, user(db))
     with pytest.raises(RuntimeError, match="cannot downgrade 0009"):
         with engine.begin() as conn:
             command.downgrade(alembic_config(conn), "0008")
     with engine.connect() as conn:
-        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0009"
+        # nothing was undone: later revisions (e.g. 0010) roll back with the refused transaction
+        assert conn.execute(text("select version_num from alembic_version")).scalar() == _head()
         assert conn.execute(text("select count(*) from backtest_runs")).scalar() == 1
