@@ -145,3 +145,34 @@ requirement that stays open usually means ingestion has stopped: check `data\ing
   means every component matches exactly.
 - **Golden tests:** place redacted notes in `backend/tests/golden/contract_notes/`, using the format in
   [tests/golden/README.md](../backend/tests/golden/README.md). They become tests automatically.
+
+## 7. Agent worker (Phase 5)
+
+Paper trading only; design in [PHASE5.md](PHASE5.md). The agent never schedules itself (decision D8):
+`python -m app.agent.cli cycle` runs **one** cycle for every configured agent and exits.
+
+| Step | Who | Command |
+|---|---|---|
+| Back up and migrate the database to `0012` | owner | `alembic upgrade head` (from `backend/`) |
+| Configure and start the agent | user | `PUT /api/v1/agent/config`, `POST /api/v1/agent/start` (or the dashboard's Agent control panel) |
+| Register the 5-minute worker task, 2 minutes after ingestion | owner | `powershell -ExecutionPolicy Bypass -File scripts\windows\register_agent_task.ps1` |
+| Run one cycle by hand | operator | `powershell -ExecutionPolicy Bypass -File scripts\windows\agent_cycle.ps1 -IgnoreMarketHours` |
+| Inspect | operator | `python -m app.agent.cli status`, `data\agent.log`, `GET /api/v1/agent/status`, `/agent/cycles`, `/agent/events` |
+| Remove the task | owner | `Unregister-ScheduledTask -TaskName "AgentX-Agent-Cycle" -Confirm:$false` |
+
+Exit codes of `cycle`: `0` every cycle succeeded or was skipped (another worker held that agent), `1` a cycle failed
+(recorded in `agent_cycles` with the error; the next run retries; 3 consecutive failures put the agent in ERROR).
+
+- **Fresh data comes only from ingestion** (`AgentX-Intraday-Ingestion`, §1). The agent never ingests. If ingestion
+  stops, entries are refused as stale and owed exits wait for an eligible price; protective-exit requirements are
+  recorded by Phase 4 (§2).
+- **Execution stays disabled in development.** There, a started agent is `SIGNALS_ONLY`: it records signals and never
+  submits an order. Enabling simulated execution remains the D4 procedure (D4_EXECUTION_READINESS.md §7); end-to-end
+  agent paper trading needs its own approval (D15, deferred).
+- **Restarts:** the API and the worker restart independently. A crashed cycle leaves no partial orchestration work; its
+  row is marked INTERRUPTED by the next cycle. Two workers never cycle the same agent at once (advisory lock).
+- **`WORKER_NOT_SEEN`** in the agent status means no cycle has run for `AGENT_WORKER_STALE_AFTER_SECONDS` (900 s): check
+  the scheduled task and `data\agent.log`.
+- **Risk settings** can be changed only while the agent is not RUNNING (`409 AGENT_RUNNING`).
+- **Orphaned positions** (`ORPHANED_OVERNIGHT`, an agent position whose 15:15 square-off did not fill) are never sold
+  by the agent the next day. They stay under their Phase 4 stop-loss/take-profit; close them manually if required.
