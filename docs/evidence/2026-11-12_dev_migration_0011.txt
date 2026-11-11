@@ -1,0 +1,63 @@
+Agent-X development database migration 0009 -> 0011 (2026-11-11 23:55 IST, Windows integration machine)
+Target confirmed: DB_NAME=agentx (differs from DB_TEST_NAME=agentx_test); EXECUTION_MODE=disabled before and after.
+
+== Backup (pg_dump -Fc, full database; git-ignored, not committed)
+file: data/backups/agentx_pre_0010_20261111T235501.dump (2,028,861 bytes)
+sha256: b56c00d77b07ec9b946ce6700c67152e30026d2e99f22f0bee065008dc39b788
+pg_restore --list: 32 TABLE DATA entries (listing verified)
+
+== Alembic
+history: 0009 -> 0010 (approval references) -> 0011 (protective-exit requirements)
+upgrade: Running upgrade 0009 -> 0010; Running upgrade 0010 -> 0011
+current: 0011 (head)
+alembic check: No new upgrade operations detected.
+
+== Before
+-[ RECORD 1 ]-----+---------------------------------
+db                | agentx
+rev               | 0009
+users             | 5
+orders            | 6
+fills             | 0
+positions         | 0
+ledger            | 0
+risk_decisions    | 6
+candles           | 28428
+instruments       | 12
+corporate_actions | 410
+backtest_runs     | 3
+orders_md5        | d998884f34647879adadc539b4aaffa7
+fills_md5         | d41d8cd98f00b204e9800998ecf8427e
+
+
+== After
+== post-migration state
+-[ RECORD 1 ]-----+---------------------------------
+db                | agentx
+rev               | 0011
+users             | 5
+orders            | 6
+fills             | 0
+candles           | 28428
+corporate_actions | 410
+backtest_runs     | 3
+orders_md5        | d998884f34647879adadc539b4aaffa7
+orders_with_ref   | 0
+requirements      | 0
+
+== new columns
+fills.execution_approval_reference
+orders.execution_approval_reference
+== constraints
+ck_fills_has_approval_reference validated=false
+ck_orders_policy_has_approval_reference validated=false
+== triggers
+trg_fills_append_only
+trg_fills_approval_matches_order
+trg_orders_guard
+trg_protective_exit_requirements_guard
+== probe: change an order's approval reference (rolled back)
+ERROR:  order in terminal state REJECTED cannot change
+
+Historical rows unchanged: orders_md5 identical before and after; all counts identical; no order or fill gained an approval reference.
+The UPDATE probe ran inside BEGIN ... ROLLBACK and was refused by the order guard trigger.

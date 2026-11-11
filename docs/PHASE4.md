@@ -8,8 +8,12 @@ supersedes §0 and §2 below where they differ. Operations (scheduling, operator
 
 | Item | Outcome |
 |---|---|
-| D4: execution-price source | **Not approved.** Yahoo Finance remains unapproved. A verified provider with quotes/trades is preferred. |
-| Fee and slippage assumptions | Mandatory configuration with **no defaults**. The component model is implemented (section 3.3); its rates remain an owner decision. |
+| D4: execution-price source | **Not approved for the real environment.** Yahoo Finance prices, labelled `UNVERIFIED_PROVIDER_NATIVE`, are approved for **simulation-only staging** (2026-11-11). Development stays `disabled`. See D4_EXECUTION_READINESS.md §0. |
+| Fee and slippage assumptions | Mandatory configuration with **no defaults**. The component model is implemented (section 3.3). Staging uses a `SYNTHETIC_STAGING_ONLY` schedule that is refused anywhere else; real rates remain an owner decision (B2). |
+| Approval auditability | Orders and fills record the approval reference in force at acceptance (migration `0010`, section 4). |
+| Freshness (B7) | 5-minute ingestion target, 15-minute maximum price age; stale prices block new orders; stale protective exits are recorded, alerted and resolved on fresh data (migration `0011`; D4_EXECUTION_READINESS.md §5.3c). |
+| Staging (B9) | Approved (simulation only, `STAGING-ONLY:AGENTX-MOCK-EXCHANGE-VALIDATION-001`) and scripted; not yet run: waits for fresh intraday data and the administrator-provisioned `agentx_staging` ([STAGING.md](STAGING.md)). |
+| Development database | Migrated to `0011` on 2026-11-11 with a verified backup ([evidence](evidence/2026-11-12_dev_migration_0011.txt)). |
 | Phase 4 base | Merged (PR #1). |
 
 Review findings and their resolution:
@@ -194,6 +198,27 @@ Superseded by the effective-dated, product-aware component model in
 - `risk_state.last_equity` and `risk_state.last_equity_at`.
 - The order guard trigger is replaced so that `accepted_at` and `risk_budget` are immutable too.
 
+**Migration `0010`** (additive; revises `0009`):
+- `orders.execution_approval_reference` and `fills.execution_approval_reference` (nullable; `NULL` for older rows and
+  for orders accepted while execution was disabled).
+- NOT VALID checks (bind new rows only): an order with an execution policy names its approval; every new fill
+  carries one.
+- The order guard trigger adds the column to the immutable identity columns; `trg_fills_approval_matches_order`
+  requires each fill's value to equal its order's (fills were already append-only).
+- Processing cancels an order whose approval differs from the active one (`EXECUTION_APPROVAL_CHANGED`).
+- Downgrade is refused while any reference exists.
+
+**Migration `0011`** (additive; revises `0010`):
+- `protective_exit_requirements` (user-owned): a position whose stop-loss/take-profit could not be evaluated because no
+  eligible fresh price existed. At most one OPEN row per position (partial unique index); rows are never deleted,
+  resolved rows are frozen and a recorded `stale_trigger` cannot be cleared (trigger `trg_protective_exit_requirements_guard`).
+- `OrderService.run_protective_exits` records, re-checks and resolves them, raises audit alerts
+  (`risk.protective_exit_unresolved` / `risk.protective_exit_resolved`), and never triggers an exit from stale data;
+  a crossing already seen on the stale bar is honoured once fresh data returns. Policy: D4_EXECUTION_READINESS.md §5.3c.
+- Exposed by `POST /exchange/protective-exits`, `GET /risk/protective-exits`, `GET /operator/protective-exits/unresolved`,
+  `positions[].protective_exit_unresolved` and `risk.unresolved_protective_exits`.
+- Downgrade is refused while any requirement exists.
+
 All Phase 4 tables are user-owned (`UserOwnedMixin`) and classified in `test_every_table_is_classified`.
 Downgrades are **refused while data would be lost**: `0005` refuses while orders or fills exist; `0004` refuses
 while any trading record exists. This is the same convention as `0003`.
@@ -306,7 +331,12 @@ CostModel.from_settings(settings) -> CostModel | None           # None while any
 ## 6. Known limitations
 
 - **Fills cannot happen in any real configuration yet** (D4). All fill behaviour is verified with synthetic
-  fixture bars and synthetic cost rates, both labelled as fixtures.
+  fixture bars and synthetic cost rates, both labelled as fixtures. The staging validator ([STAGING.md](STAGING.md))
+  will exercise it on a copy of the real archive, with synthetic rates, once fresh intraday data and a provisioned
+  staging database exist.
+- **Before real-environment enablement:** verified delivery cost rates and real contract-note golden tests (B2),
+  a passing staging run (B9), the latency confirmation (B7), Windows validation (B8) and the final owner approval and
+  reference (B1). The list is kept in D4_EXECUTION_READINESS.md §7.3.
 - The next-bar-open model is a simulation assumption. It does not model queue position, intrabar sequencing
   beyond open/low/high, or auctions.
 - The day-start reference is the equity at the first refresh on a session date. Phase 5 must refresh at session
