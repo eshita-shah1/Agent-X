@@ -127,11 +127,14 @@ def test_no_application_code_assigns_a_verified_price_basis():
     assert PriceBasis.UNVERIFIED_PROVIDER_NATIVE.value == "UNVERIFIED_PROVIDER_NATIVE"
 
 
-def test_no_mock_exchange_order_or_execution_code_exists():
-    forbidden_dirs = {"exchange", "mock_exchange", "orders", "execution", "risk", "strategies", "agent", "backtest"}
+def test_execution_code_exists_only_in_the_phase4_packages():
+    # Phase 4 added the risk engine and Mock Exchange (app/risk, app/exchange, app/orders). Packages of later phases
+    # must still not exist, and market-data code must stay free of order/execution logic.
+    forbidden_dirs = {"mock_exchange", "execution", "strategies", "agent", "backtest"}
     assert not [p for p in APP.iterdir() if p.is_dir() and p.name in forbidden_dirs]
     for path, text in app_sources().items():
-        assert not re.search(r"\b(execution_price|fill_price|place_order|submit_order)\b", text), path.name
+        if "marketdata" in path.parts:
+            assert not re.search(r"\b(execution_price|fill_price|place_order|submit_order)\b", text), path.name
 
 
 # ---- D4: inferred closures (D) --------------------------------------------------------------------------------------
