@@ -89,13 +89,28 @@ and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
 | POST | `/api/v1/orders/{id}/cancel` | Body `{"reason"?: str}`; `409` if not open; `404` if not own |
 | GET | `/api/v1/portfolio` | Cash, reserved, available, positions, realized/unrealized P&L, equity (`null` when any position cannot be marked with an eligible price) |
 | GET | `/api/v1/portfolio/fills?limit=` | Executions with price provenance |
+| GET | `/api/v1/portfolio/pnl/daily?session_date=YYYY-MM-DD` | Realized P&L, fees and net for a simulated (IST) session date: fills by their simulated fill time, cash-in-lieu by ex-date; plus `dividend_income` by payment date (not trading P&L) |
+| GET | `/api/v1/portfolio/corporate-actions/pending` | Positions frozen by a split/bonus/other action, with the action each is waiting for and the last attempt |
+| GET | `/api/v1/portfolio/corporate-actions/adjustments` | The caller's adjustment history (append-only, read-only) |
+| GET | `/api/v1/portfolio/dividends` | The caller's dividend credits and recorded refusals (read-only) |
+
+### Operator endpoints (`users.is_operator`; set only by `python -m app.ops.cli set-operator`)
+Non-operators get `403`, and every denied attempt is audited (`operator.access_denied`). Operators act on
+corporate-action records; each affected user's result is computed and recorded separately.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/operator/corporate-actions/pending` | Actions freezing positions, with the number of affected positions |
+| POST | `/api/v1/operator/corporate-actions/{id}/adjustments` | `{evidence_reference, confirm_ratio_numerator, confirm_ratio_denominator, cash_in_lieu_price?, cash_in_lieu_source?, cash_in_lieu_observed_at?}`. Applies to every affected position. Returns `[{user_id, adjustment, replayed}]` (APPLIED / REJECTED / BLOCKED_FRACTIONAL). `404` for an unknown action |
+| GET | `/api/v1/operator/dividends/pending` | Dividends past their ex-date with entitled users who have no credit (and users blocked by an unadjusted split) |
+| POST | `/api/v1/operator/dividends/{id}/credits` | `{evidence_reference, confirmed_amount_per_share, payment_date, accept_provider_difference?}`. Credits gross amounts to every entitled user (holding at the close before the ex-date). Returns `[{credit, replayed}]`. `422` if not a dividend or the amount is not positive |
 | GET | `/api/v1/risk/settings` | `404` until configured (no defaults) |
 | PUT | `/api/v1/risk/settings` | All fields required (see below) |
 | GET | `/api/v1/risk/state` | **Refreshes** the equity references first, then returns kill switch, peak/day-start/last equity, current `equity`, `drawdown_pct`, `daily_loss_pct` and `breaches` |
 | POST | `/api/v1/risk/kill-switch` | `{"engaged": bool, "reason": str}`; engaging cancels all open orders |
 | GET | `/api/v1/risk/decisions?limit=` | Risk decision log |
 | POST | `/api/v1/exchange/process` | Executes the caller's resting orders against bars finalized since they were accepted (next-bar-open model), expires DAY orders, refreshes risk. Returns `{changed_orders, risk}`. Explicitly triggered; nothing is scheduled |
-| GET | `/api/v1/exchange/status` | Execution model, whether execution is enabled and why not (`blocking_reasons`, including the names of unset cost settings) |
+| GET | `/api/v1/exchange/status` | `execution_mode`, `execution_policy`, `execution_approval_reference`, execution model, whether execution is enabled and why not (`blocking_reasons`), and `disclosures` (in simulation mode: simulation-only fills on unverified Yahoo data; no five-year intraday backtesting at launch) |
 
 ### `POST /api/v1/orders`
 ```json
@@ -113,9 +128,11 @@ and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
 }
 ```
 - `client_order_id`: 1–64 chars `[A-Za-z0-9._:-]`, unique per user (idempotency key).
+- `product` (optional, default `DELIVERY`; `INTRADAY` is rejected `PRODUCT_NOT_SUPPORTED`).
+- `signal_at` (optional, timezone-aware): when the decision was made; never in the future; defaults to acceptance time.
 - `limit_price` is required for `LIMIT` and forbidden for `MARKET`. Prices are > 0 with at most 6 dp.
 - Entries (`BUY`) need `stop_loss_price` (otherwise risk rejects with `STOP_LOSS_REQUIRED`). `SELL` may not carry stop/take-profit.
-- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. Orders carry `accepted_at` (only bars starting at or after it can fill them) and `risk_budget` (the user's hard per-trade risk limit in money; fills are capped by it if the next open gaps). Fills carry `price_source_kind` (`NEXT_BAR_OPEN` or `BAR_LIMIT_CROSS`) and `fee_breakdown` (brokerage, stt, txn_charge, sebi_fee, stamp_duty, gst, total). `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
+- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. Orders carry `signal_at`, `decision_price_ref` (the reference bar the decision used), `execution_policy` (policy in force at acceptance), `accepted_at` (only bars starting at or after it can fill them) and `risk_budget` (the user's hard per-trade risk limit in money; fills are capped by it if the next open gaps). Fills carry `realized_pnl` (attributed to the simulated fill time), `execution_policy` (`VERIFIED_NEXT_BAR_OPEN` or `SIMULATION_PROVIDER_NATIVE`), `price_source_kind` (`NEXT_BAR_OPEN` or `BAR_LIMIT_CROSS`) and `fee_breakdown` (brokerage, stt, txn_charge, sebi_fee, stamp_duty, gst, total). `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
 
 ### `PUT /api/v1/risk/settings`
 ```json

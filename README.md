@@ -34,7 +34,7 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 
 Each phase is reviewed and approved by the project owner before it is committed, tagged (`phase-N-...`) and followed by the next. Futures support stays disabled until genuine contract-specific data exists; equities come first.
 
-**What exists today:** user registration and JWT login, a per-user virtual account with an immutable initial-capital baseline, health endpoints, and a market-data foundation: 10 NSE equities registered (NIFTY/BANKNIFTY futures are disabled placeholders), a Yahoo Finance adapter, a validated PostgreSQL archive of 5-minute candles with provenance, restatement tracking, raw/adjusted separation, coverage and freshness reporting, ingestion jobs and authenticated market-data APIs. The first 60-day backfill was collected and its actual coverage is documented in [docs/MARKET_DATA.md](docs/MARKET_DATA.md). Phase 4 adds a deterministic risk engine and a Mock Exchange (orders, fills at the next bar's open, an Indian-equity component cost model, append-only cash ledger, long-only positions, risk-state refresh); no order can fill until an execution-price source is approved (decision D4, [docs/PHASE4.md](docs/PHASE4.md)). There is no strategy, agent, backtesting or LLM functionality yet.
+**What exists today:** user registration and JWT login, a per-user virtual account with an immutable initial-capital baseline, health endpoints, and a market-data foundation: 10 NSE equities registered (NIFTY/BANKNIFTY futures are disabled placeholders), a Yahoo Finance adapter, a validated PostgreSQL archive of 5-minute candles with provenance, restatement tracking, raw/adjusted separation, coverage and freshness reporting, ingestion jobs and authenticated market-data APIs. The first 60-day backfill was collected and its actual coverage is documented in [docs/MARKET_DATA.md](docs/MARKET_DATA.md). Phase 4 adds a deterministic risk engine and a Mock Exchange (orders, fills at the next bar's open, an Indian-equity component cost model, append-only cash ledger, long-only positions, risk-state refresh); execution is disabled by default; for the MVP, fills will be **simulation-only** on unverified Yahoo Finance data once approved ([docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md)). **Five-year intraday backtesting is not available at launch**: Yahoo provides about 60 days of 5-minute history and the archive grows only prospectively. There is no strategy, agent, backtesting or LLM functionality yet.
 
 **Market data in brief** (details and evidence in [docs/MARKET_DATA.md](docs/MARKET_DATA.md)):
 
@@ -74,6 +74,9 @@ Interactive API docs: `http://localhost:8000/docs`. Full instructions, including
 - [docs/MARKET_DATA.md](docs/MARKET_DATA.md): Phase 2 market-data design, verified Yahoo behaviour, archive contents, limitations, operations
 - [docs/API.md](docs/API.md): endpoints
 - [docs/PHASE4.md](docs/PHASE4.md): risk engine, Mock Exchange, decision D4, shared contracts, limitations
+- [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends
+- [docs/STAGING.md](docs/STAGING.md) and [docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md): validation procedures
 
 ## Repository layout
 
