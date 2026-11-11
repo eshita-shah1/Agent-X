@@ -7,16 +7,23 @@ with the reason, never estimated from an unapproved price.
 
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.enums import OPEN_ORDER_STATUSES, OrderSide
-from app.db.models import CashLedgerEntry, Order, Position, VirtualAccount
+from app.db.enums import OPEN_ORDER_STATUSES, AdjustmentStatus, OrderSide
+from app.db.models import CashLedgerEntry, CorporateActionAdjustment, Order, Position, VirtualAccount
 from app.db.scoping import owned_select
 from app.exchange.accounting import PositionState, unrealized_pnl
-from app.exchange.pricing import ExecutionPriceGate, PriceCheck
+from app.exchange.pricing import (
+    ExecutionPriceGate,
+    PriceCheck,
+    PriceRejection,
+    scale_changing_actions_between,
+    session_date_of,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,25 @@ class AccountValuation:
     equity: Decimal | None  # None when any open position cannot be marked
     gross_exposure: Decimal | None  # marked positions + cash committed to open BUY orders
     unmarked_instrument_ids: list[int]
+
+
+def unadjusted_action(db: Session, position: Position, upto: date):
+    """The earliest split/bonus/other corporate action (ex-date after the position's simulated open date, on or before
+    `upto`) with no APPLIED adjustment for this position, or None. Such a position is frozen."""
+    if position.quantity == 0 or position.opened_at is None:
+        return None
+    actions = scale_changing_actions_between(db, position.instrument_id, session_date_of(position.opened_at), upto)
+    if not actions:
+        return None
+    applied = set(
+        db.scalars(
+            select(CorporateActionAdjustment.corporate_action_id).where(
+                CorporateActionAdjustment.position_id == position.id,
+                CorporateActionAdjustment.status == AdjustmentStatus.APPLIED,
+            )
+        )
+    )
+    return next((a for a in actions if a.id not in applied), None)
 
 
 class PortfolioReader:
@@ -89,6 +115,16 @@ class PortfolioReader:
         unmarked: list[int] = []
         for pos in self.open_positions(account.user_id):
             check = self.gate.check(pos.instrument_id)
+            if check.ok and pos.opened_at is not None:
+                assert check.quote is not None
+                mark_session = check.quote.session_date or session_date_of(check.quote.as_of)
+                action = unadjusted_action(self.db, pos, mark_session)
+                if action is not None:
+                    check = PriceCheck(
+                        pos.instrument_id, check.quote, PriceRejection.CORPORATE_ACTION_UNADJUSTED_POSITION,
+                        f"{action.action_type.value} ex-date {action.ex_date} (corporate action {action.id}) after the "
+                        "position was opened and not yet adjusted; the mark is not on the position's price basis",
+                    )
             if check.ok:
                 assert check.quote is not None
                 mark = check.quote.price
@@ -116,3 +152,50 @@ class PortfolioReader:
             gross_exposure=gross,
             unmarked_instrument_ids=unmarked,
         )
+
+
+@dataclass(frozen=True)
+class DailyPnl:
+    session_date: date
+    realized_pnl: Decimal  # gross of fees: fills + cash-in-lieu of corporate-action adjustments
+    fees: Decimal
+    net_realized_pnl: Decimal
+    fills: int
+    adjustments: int
+    unattributed_legacy_fills: int  # fills booked before 0007 (no stored realized P&L)
+    dividend_income: Decimal = Decimal(0)  # gross dividends credited with this payment date (not trading P&L)
+    dividends: int = 0
+
+
+def daily_pnl(db: Session, user_id: uuid.UUID, session: date) -> DailyPnl:
+    """Realized P&L and fees attributed to the *simulated* session date (fills by `price_as_of`, adjustments by
+    ex-date), never to the date the simulator happened to process them."""
+    from app.db.models import Fill
+    from app.exchange.service import session_bounds
+
+    start, end = session_bounds(session)
+    rows = db.execute(
+        select(Fill.realized_pnl, Fill.fee).where(Fill.user_id == user_id, Fill.price_as_of >= start, Fill.price_as_of < end)
+    ).all()
+    adj = db.scalars(
+        select(CorporateActionAdjustment.realized_pnl).where(
+            CorporateActionAdjustment.user_id == user_id,
+            CorporateActionAdjustment.status == AdjustmentStatus.APPLIED,
+            CorporateActionAdjustment.ex_date == session,
+        )
+    ).all()
+    from app.db.enums import DividendCreditStatus
+    from app.db.models import DividendCredit
+
+    divs = db.scalars(
+        select(DividendCredit.gross_amount).where(
+            DividendCredit.user_id == user_id, DividendCredit.status == DividendCreditStatus.APPLIED,
+            DividendCredit.payment_date == session,
+        )
+    ).all()
+    realized = sum((r for r, _ in rows if r is not None), Decimal(0)) + sum(adj, Decimal(0))
+    fees = sum((f for _, f in rows), Decimal(0))
+    return DailyPnl(
+        session, realized, fees, realized - fees, len(rows), len(adj), sum(1 for r, _ in rows if r is None),
+        sum(divs, Decimal(0)), len(divs),
+    )
