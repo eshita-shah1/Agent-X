@@ -116,6 +116,10 @@ class RiskState(UserOwnedMixin, Base):
     peak_equity: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     day_session_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     day_start_equity: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    # Most recent determined equity and when it was computed (migration 0005), so staleness of the risk
+    # references is visible instead of silent.
+    last_equity: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    last_equity_at: Mapped[datetime | None] = _ts(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -148,6 +152,7 @@ class Order(UserOwnedMixin, Base):
             "status IN ('PENDING','PARTIALLY_FILLED') OR reserved_cash = 0", name="reservation_released_when_closed"
         ),
         CheckConstraint(_TERMINAL_OR_OPEN, name="status_matches_fill_progress"),
+        CheckConstraint("risk_budget IS NULL OR risk_budget >= 0", name="risk_budget_non_negative"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -172,6 +177,10 @@ class Order(UserOwnedMixin, Base):
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     reserved_cash: Mapped[Decimal] = mapped_column(MONEY, nullable=False, server_default="0")
     avg_fill_price: Mapped[Decimal | None] = mapped_column(AVG_PRICE, nullable=True)
+    # Decision time on the trading clock (migration 0005). Only bars starting at or after it can fill the order.
+    accepted_at: Mapped[datetime] = _ts()
+    # Risk amount approved for a BUY entry; fills are capped so a gap at the next open cannot exceed it.
+    risk_budget: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     created_at: Mapped[datetime] = _ts(default_now=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -216,6 +225,8 @@ class Fill(UserOwnedMixin, Base):
     price_as_of: Mapped[datetime] = _ts()
     price_observed_at: Mapped[datetime] = _ts()
     cost_model: Mapped[dict] = mapped_column(JSONB, nullable=False)  # assumptions in force for this fill
+    # Per-component fees (brokerage, STT, transaction charge, SEBI fee, stamp duty, GST); migration 0005.
+    fee_breakdown: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     executed_at: Mapped[datetime] = _ts()
 
 
