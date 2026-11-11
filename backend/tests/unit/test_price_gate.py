@@ -9,6 +9,7 @@ import pytest
 from app.db.enums import PriceBasis
 from app.exchange.pricing import (
     DisabledExecutionPriceSource,
+    ExecutionBar,
     ExecutionPriceGate,
     ExecutionPricePolicy,
     ExecutionQuote,
@@ -25,7 +26,7 @@ GOOD = ExecutionQuote(
     provider_code="approved",
     price_basis=PriceBasis.AS_TRADED_VERIFIED,
     is_final=True,
-    kind=QuoteKind.CANDLE_CLOSE,
+    kind=QuoteKind.LATEST_BAR_CLOSE,
     source_ref="candle:1",
     volume=1000,
 )
@@ -40,11 +41,15 @@ class FixedSource:
     name = "fixed"
     enabled = True
 
-    def __init__(self, quote):
+    def __init__(self, quote, bars=()):
         self.quote = quote
+        self.bars = list(bars)
 
     def latest(self, instrument_id):
         return self.quote
+
+    def bars_from(self, instrument_id, start):
+        return [b for b in self.bars if b.bar_start >= start]
 
 
 def gate(quote, policy=POLICY):
@@ -105,3 +110,69 @@ def test_check_reports_provenance():
     assert d["quote"]["provider_code"] == "approved"
     assert d["quote"]["price_basis"] == "AS_TRADED_VERIFIED"
     assert d["quote"]["source_ref"] == "candle:1"
+
+
+# ---- fill bars (next-bar-open model) ------------------------------------------------------------------
+
+ACCEPTED = NOW - timedelta(minutes=12)
+
+
+def bar(minutes_after_accept: int, **over) -> ExecutionBar:
+    start = ACCEPTED + timedelta(minutes=minutes_after_accept)
+    fields = dict(
+        instrument_id=1, bar_start=start, bar_end=start + timedelta(minutes=5), session_date=start.date(),
+        open=Decimal("100"), high=Decimal("101"), low=Decimal("99"), close=Decimal("100.5"), volume=1000,
+        observed_at=start + timedelta(minutes=5, seconds=30), provider_code="approved",
+        price_basis=PriceBasis.AS_TRADED_VERIFIED, is_final=True, source_ref=f"candle:{minutes_after_accept}",
+    )
+    fields.update(over)
+    return ExecutionBar(**fields)
+
+
+def bars_gate(*bars):
+    return ExecutionPriceGate(FixedSource(GOOD, bars), POLICY, lambda: NOW)
+
+
+def test_fill_bars_are_returned_oldest_first_when_all_eligible():
+    result = bars_gate(bar(0), bar(5)).fill_bars(1, ACCEPTED)
+    assert [b.source_ref for b in result.bars] == ["candle:0", "candle:5"] and result.blocked_by is None
+
+
+def test_disabled_source_yields_no_fill_bars():
+    result = ExecutionPriceGate(DisabledExecutionPriceSource(), POLICY, lambda: NOW).fill_bars(1, ACCEPTED)
+    assert result.bars == [] and result.blocked_by is PriceRejection.SOURCE_DISABLED
+
+
+@pytest.mark.parametrize(
+    "bad,expected",
+    [
+        (dict(price_basis=PriceBasis.UNVERIFIED_PROVIDER_NATIVE), PriceRejection.UNVERIFIED_BASIS),
+        (dict(provider_code="other"), PriceRejection.UNAPPROVED_PROVIDER),
+        (dict(is_final=False), PriceRejection.NOT_FINAL),
+        (dict(observed_at=NOW + timedelta(seconds=1)), PriceRejection.FUTURE_TIMESTAMP),
+        (dict(low=Decimal("0")), PriceRejection.NON_POSITIVE_PRICE),
+    ],
+)
+def test_an_ineligible_bar_stops_iteration_and_is_never_skipped(bad, expected):
+    # A later eligible bar must not be used to "skip over" an ineligible one.
+    result = bars_gate(bar(0, **bad), bar(5)).fill_bars(1, ACCEPTED)
+    assert result.bars == [] and result.blocked_by is expected
+
+
+def test_a_bar_that_started_before_acceptance_is_refused():
+    class Leaky(FixedSource):
+        def bars_from(self, instrument_id, start):
+            return self.bars  # ignores `start`: a buggy source
+
+    g = ExecutionPriceGate(Leaky(GOOD, [bar(-5)]), POLICY, lambda: NOW)
+    result = g.fill_bars(1, ACCEPTED)
+    assert result.bars == [] and result.blocked_by is PriceRejection.FUTURE_TIMESTAMP
+
+
+def test_fill_bars_are_not_subject_to_the_reference_staleness_rule():
+    # The order was accepted on fresh data; the bar right after acceptance is the correct fill bar even if
+    # processing happens later. (A market order is still limited to the immediately next bar by the exchange.)
+    old_accept = NOW - timedelta(hours=2)
+    g = ExecutionPriceGate(FixedSource(GOOD, [bar(0, bar_start=old_accept, bar_end=old_accept + timedelta(minutes=5),
+                                                       observed_at=old_accept + timedelta(minutes=6))]), POLICY, lambda: NOW)
+    assert len(g.fill_bars(1, old_accept).bars) == 1

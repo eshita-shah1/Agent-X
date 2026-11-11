@@ -83,7 +83,7 @@ and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/v1/orders` | Submit. `201` new order (it may be `REJECTED`, with a reason), `200` idempotent replay, `409` client_order_id reused for a different order, `422` invalid request or instrument |
+| POST | `/api/v1/orders` | Submit. Orders **never fill at submission**: an accepted order is `PENDING` until a later bar is processed. `201` new order (it may be `REJECTED`, with a reason), `200` idempotent replay, `409` client_order_id reused for a different order, `422` invalid request or instrument |
 | GET | `/api/v1/orders?status=&limit=` | Own orders, newest first |
 | GET | `/api/v1/orders/{id}` | Order with its fills and risk decision; `404` if not own |
 | POST | `/api/v1/orders/{id}/cancel` | Body `{"reason"?: str}`; `409` if not open; `404` if not own |
@@ -91,10 +91,11 @@ and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
 | GET | `/api/v1/portfolio/fills?limit=` | Executions with price provenance |
 | GET | `/api/v1/risk/settings` | `404` until configured (no defaults) |
 | PUT | `/api/v1/risk/settings` | All fields required (see below) |
-| GET | `/api/v1/risk/state` | Kill switch and equity references |
+| GET | `/api/v1/risk/state` | **Refreshes** the equity references first, then returns kill switch, peak/day-start/last equity, current `equity`, `drawdown_pct`, `daily_loss_pct` and `breaches` |
 | POST | `/api/v1/risk/kill-switch` | `{"engaged": bool, "reason": str}`; engaging cancels all open orders |
 | GET | `/api/v1/risk/decisions?limit=` | Risk decision log |
-| GET | `/api/v1/exchange/status` | Whether execution is enabled and why not (`blocking_reasons`) |
+| POST | `/api/v1/exchange/process` | Executes the caller's resting orders against bars finalized since they were accepted (next-bar-open model), expires DAY orders, refreshes risk. Returns `{changed_orders, risk}`. Explicitly triggered; nothing is scheduled |
+| GET | `/api/v1/exchange/status` | Execution model, whether execution is enabled and why not (`blocking_reasons`, including the names of unset cost settings) |
 
 ### `POST /api/v1/orders`
 ```json
@@ -114,7 +115,7 @@ and price values are decimal strings. See [PHASE4.md](PHASE4.md) for semantics.
 - `client_order_id`: 1–64 chars `[A-Za-z0-9._:-]`, unique per user (idempotency key).
 - `limit_price` is required for `LIMIT` and forbidden for `MARKET`. Prices are > 0 with at most 6 dp.
 - Entries (`BUY`) need `stop_loss_price` (otherwise risk rejects with `STOP_LOSS_REQUIRED`). `SELL` may not carry stop/take-profit.
-- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
+- Response: `{ "order": {...}, "risk_decision": {...}, "replayed": bool }`. Orders carry `accepted_at` (only bars starting at or after it can fill them) and `risk_budget` (the user's hard per-trade risk limit in money; fills are capped by it if the next open gaps). Fills carry `price_source_kind` (`NEXT_BAR_OPEN` or `BAR_LIMIT_CROSS`) and `fee_breakdown` (brokerage, stt, txn_charge, sebi_fee, stamp_duty, gst, total). `order.quantity` is the risk-approved size; `requested_quantity` is what was asked.
 
 ### `PUT /api/v1/risk/settings`
 ```json

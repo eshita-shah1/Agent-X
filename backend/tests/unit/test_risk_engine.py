@@ -10,7 +10,11 @@ from app.exchange.costs import CostModel
 from app.risk.engine import AccountRiskSnapshot, TradeProposal, UserRiskLimits, evaluate
 
 D = Decimal
-COSTS = CostModel(D("20"), D("10"), D("30"), D("5"))
+# SYNTHETIC rates (see test_costs_and_accounting); worst-case buy cost per share at 100.05 is 100.2334917.
+COSTS = CostModel(
+    brokerage_bps=D("10"), brokerage_max_per_order=D("20"), stt_buy_bps=D("0"), stt_sell_bps=D("25"),
+    txn_charge_bps=D("3"), sebi_fee_bps=D("0"), stamp_duty_buy_bps=D("3"), gst_pct=D("18"), slippage_bps=D("5"),
+)
 LIMITS = UserRiskLimits(
     max_risk_per_trade_pct=D("1"),
     max_position_allocation_pct=D("20"),
@@ -87,19 +91,19 @@ def test_strategy_limit_can_only_tighten_the_user_limit():
 def test_allocation_cap_counts_existing_holding_and_open_buys():
     snap = replace(SNAP, position_value=D("15000"), open_buy_commitment=D("4000"), gross_exposure=D("19000"))
     r = run(replace(BUY, quantity=100), snap=snap)
-    # 20% of 100000 = 20000; remaining 1000 / (100.05 * 1.001) -> 9
+    # 20% of 100000 = 20000; remaining 1000 / 100.2334917 -> 9
     assert r.outcome is RiskOutcome.RESIZED and r.approved_quantity == 9
 
 
 def test_exposure_cap():
     r = run(replace(BUY, quantity=100), limits=replace(LIMITS, max_portfolio_exposure_pct=D("50")),
             snap=replace(SNAP, gross_exposure=D("49500")))
-    assert r.approved_quantity == 4  # 500 / 100.15005
+    assert r.approved_quantity == 4  # 500 / 100.2334917
 
 
-def test_cash_cap_includes_fixed_fee():
+def test_cash_cap_includes_every_fee():
     r = run(replace(BUY, quantity=100), snap=replace(SNAP, available_cash=D("1021")))
-    assert r.approved_quantity == 9  # (1021 - 20) / 100.15005 = 9.99
+    assert r.approved_quantity == 10  # 10 shares cost 1000.5 + 1.834917 fees; 11 would cost > 1021
 
 
 def test_quantity_cap_counts_held_and_open_buy_quantity():

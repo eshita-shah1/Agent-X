@@ -115,6 +115,9 @@ class RiskResult:
     sizing_price: Decimal | None = None
     risk_amount: Decimal | None = None
     effective_risk_pct: Decimal | None = None
+    # Hard per-trade risk limit in money (equity x effective %). The exchange caps fills with it, so a gap
+    # at the next open can never make the realized trade risk exceed the user's limit.
+    risk_limit_amount: Decimal | None = None
     checks: list[RiskCheck] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
 
@@ -223,8 +226,7 @@ def evaluate(
         effective_pct = min(effective_pct, proposal.strategy_max_risk_pct)
 
     per_share_risk = entry - proposal.stop_loss_price
-    fee_rate = costs.fee_bps(OrderSide.BUY) / Decimal(10000)
-    per_share_cash = entry * (1 + fee_rate)
+    per_share_cash = costs.buy_cost_per_share_upper(entry)
     position_value = snapshot.position_value or ZERO
 
     caps: list[RiskCheck] = [
@@ -253,8 +255,8 @@ def evaluate(
         RiskCheck(
             "available_cash",
             True,
-            f"available {snapshot.available_cash} incl. fixed fee {costs.fee_fixed_per_order}",
-            _floor((snapshot.available_cash - costs.fee_fixed_per_order) / per_share_cash),
+            f"available {snapshot.available_cash}, worst-case fees included",
+            costs.max_buy_quantity(entry, snapshot.available_cash),
         ),
     ]
     if limits.max_position_quantity is not None:
@@ -285,6 +287,7 @@ def evaluate(
             sizing_price=entry,
             risk_amount=(per_share_risk * qty) if qty else None,
             effective_risk_pct=effective_pct,
+            risk_limit_amount=(equity * effective_pct / HUNDRED).quantize(Decimal("0.000001"), rounding=ROUND_FLOOR),
             checks=checks,
             reasons=reasons,
         )
