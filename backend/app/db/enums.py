@@ -72,6 +72,14 @@ class BatchStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
+class BacktestRunStatus(str, enum.Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"  # refused at run time (e.g. the data changed) or crashed; nothing was stored
+    INTERRUPTED = "INTERRUPTED"  # the worker died or lost its heartbeat; nothing was stored
+
+
 class CalendarDayKind(str, enum.Enum):
     HOLIDAY = "HOLIDAY"
     SPECIAL_SESSION = "SPECIAL_SESSION"

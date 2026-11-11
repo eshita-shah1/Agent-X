@@ -1,3 +1,11 @@
+from app.db.models.backtest import (
+    BacktestEquityPoint,
+    BacktestEvent,
+    BacktestInstrumentResult,
+    BacktestRun,
+    BacktestSelectionDecision,
+    BacktestTrade,
+)
 from app.db.models.ingestion import (
     DataIngestionBatch,
     DataIngestionJob,
@@ -14,6 +22,12 @@ from app.db.models.user import AuditEvent, User, VirtualAccount
 __all__ = [
     "AdjustedCandle",
     "AuditEvent",
+    "BacktestEquityPoint",
+    "BacktestEvent",
+    "BacktestInstrumentResult",
+    "BacktestRun",
+    "BacktestSelectionDecision",
+    "BacktestTrade",
     "Candle",
     "CorporateAction",
     "DataIngestionBatch",

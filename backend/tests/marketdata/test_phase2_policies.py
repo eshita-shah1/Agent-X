@@ -128,8 +128,8 @@ def test_no_application_code_assigns_a_verified_price_basis():
 
 
 def test_no_mock_exchange_order_or_execution_code_exists():
-    # Phase 3 (decision D19) permits app/indicators and app/strategies; every other ban stays.
-    forbidden_dirs = {"exchange", "mock_exchange", "orders", "execution", "risk", "agent", "backtest"}
+    # Phase 3 (decision D19) permits app/indicators, app/strategies and app/backtest; every other ban stays.
+    forbidden_dirs = {"exchange", "mock_exchange", "orders", "execution", "risk", "agent"}
     assert not [p for p in APP.iterdir() if p.is_dir() and p.name in forbidden_dirs]
     for path, text in app_sources().items():
         assert not re.search(r"\b(execution_price|fill_price|place_order|submit_order)\b", text), path.name

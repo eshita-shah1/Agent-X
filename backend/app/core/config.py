@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     marketdata_incremental_overlap_hours: int = Field(default=24, ge=0)
     marketdata_job_heartbeat_timeout_seconds: int = Field(default=300, gt=0)
     marketdata_request_pause_seconds: float = Field(default=1.5, ge=0)
+    # Backtests (Phase 3, operational): a QUEUED/RUNNING run whose heartbeat is older than this is presumed dead
+    # and is marked INTERRUPTED when its owner next starts a run.
+    backtest_job_heartbeat_timeout_seconds: int = Field(default=600, gt=0)
 
     @field_validator("jwt_secret_key")
     @classmethod

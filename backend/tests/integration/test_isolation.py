@@ -95,7 +95,12 @@ GLOBAL_TABLES = {
 }
 # data_ingestion_jobs has a nullable requested_by_user_id; the API only ever shows a user their own jobs.
 SYSTEM_TABLES = {"users", "audit_events", "data_ingestion_jobs"}
-USER_OWNED_TABLES = {"virtual_accounts"}
+USER_OWNED_TABLES = {
+    "virtual_accounts",
+    # Phase 3 backtests: every result row carries its run's owner (an insert trigger requires it to match the run's)
+    "backtest_runs", "backtest_instrument_results", "backtest_selection_decisions", "backtest_trades", "backtest_events",
+    "backtest_equity_points",
+}
 
 
 def test_every_table_is_classified():
