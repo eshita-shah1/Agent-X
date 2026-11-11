@@ -26,7 +26,15 @@ $tables = @("data_providers", "instruments", "instrument_provider_symbols", "pro
     "provider_health_state", "data_ingestion_jobs", "data_ingestion_batches", "data_quality_issues",
     "data_restatement_events", "exchange_calendar_days", "candles", "adjusted_candles", "corporate_actions")
 
-if (-not $env:AGENTX_STAGING_DB_PASSWORD) { throw "Set `$env:AGENTX_STAGING_DB_PASSWORD for this session first." }
+if (-not $env:AGENTX_STAGING_DB_PASSWORD) {
+    # Fallback: the git-ignored .env.staging (one line: AGENTX_STAGING_DB_PASSWORD=...). Never committed.
+    $stagingEnv = Join-Path $repo ".env.staging"
+    if (Test-Path $stagingEnv) {
+        $line = Get-Content $stagingEnv | Where-Object { $_ -match "^AGENTX_STAGING_DB_PASSWORD=" } | Select-Object -First 1
+        if ($line) { $env:AGENTX_STAGING_DB_PASSWORD = $line -replace "^AGENTX_STAGING_DB_PASSWORD=", "" }
+    }
+}
+if (-not $env:AGENTX_STAGING_DB_PASSWORD) { throw "Set `$env:AGENTX_STAGING_DB_PASSWORD or create .env.staging first." }
 $envFile = Get-Content (Join-Path $repo ".env")
 function EnvValue($k) { ($envFile | Where-Object { $_ -match "^$k=" } | Select-Object -First 1) -replace "^$k=", "" }
 $srcUser = EnvValue "DB_USER"; $srcDb = EnvValue "DB_NAME"; $srcPass = EnvValue "DB_PASSWORD"

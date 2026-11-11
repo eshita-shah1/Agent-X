@@ -19,7 +19,15 @@ $backend = Join-Path $repo "backend"
 $python = Join-Path $repo ".venv\Scripts\python.exe"
 if (-not $Schedule) { $Schedule = Join-Path $repo "data\staging\cost_schedule.SYNTHETIC_STAGING_ONLY.json" }
 if (-not (Test-Path $Schedule)) { throw "Schedule not found: $Schedule" }
-if (-not $env:AGENTX_STAGING_DB_PASSWORD) { throw "Set `$env:AGENTX_STAGING_DB_PASSWORD for this session first." }
+if (-not $env:AGENTX_STAGING_DB_PASSWORD) {
+    # Fallback: the git-ignored .env.staging (one line: AGENTX_STAGING_DB_PASSWORD=...). Never committed.
+    $stagingEnv = Join-Path $repo ".env.staging"
+    if (Test-Path $stagingEnv) {
+        $line = Get-Content $stagingEnv | Where-Object { $_ -match "^AGENTX_STAGING_DB_PASSWORD=" } | Select-Object -First 1
+        if ($line) { $env:AGENTX_STAGING_DB_PASSWORD = $line -replace "^AGENTX_STAGING_DB_PASSWORD=", "" }
+    }
+}
+if (-not $env:AGENTX_STAGING_DB_PASSWORD) { throw "Set `$env:AGENTX_STAGING_DB_PASSWORD or create .env.staging first." }
 $date = Get-Date -Format "yyyy-MM-dd"
 $evidence = Join-Path $repo "docs\evidence"
 
