@@ -35,6 +35,7 @@ from app.backtest.model import (
     WarmupSource,
 )
 from app.marketdata.calendar import TradingCalendar
+from app.strategies.configs import corporate_action_floor, warmup_sessions_before
 
 MAX_LISTED_MISSING = 500  # missing bar timestamps listed individually; the count is always complete
 
@@ -103,16 +104,14 @@ def prepare_instrument(request: BacktestRequest, data: InstrumentData, calendar:
             iid,
         )
 
-    floor = max((a.ex_date for a in data.corporate_actions if a.action_type in REFUSED_ACTION_TYPES and a.ex_date <= request.start), default=None)
+    floor = corporate_action_floor(((a.ex_date, a.action_type) for a in data.corporate_actions), request.start)
     prior_sessions = sorted({b.session_date for b in data.bars if b.session_date < request.start})
     period_sessions = sorted({b.session_date for b in data.bars if request.start <= b.session_date <= request.end})
     if not period_sessions:
         raise BacktestRefused(RefusalCode.NO_DATA, f"no bars between {request.start} and {request.end}", iid)
 
     w = request.warmup_sessions
-    usable_prior = [d for d in prior_sessions if floor is None or d >= floor]
-    used_prior = usable_prior[-w:] if w else []
-    truncated = floor if w and len(used_prior) < min(w, len(prior_sessions)) else None
+    used_prior, truncated = warmup_sessions_before(prior_sessions, floor, w)
     shortfall = w - len(used_prior)
     shifted = period_sessions[:shortfall]
     evaluation = period_sessions[shortfall:]

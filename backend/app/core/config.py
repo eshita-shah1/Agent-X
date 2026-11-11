@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # Backtests (Phase 3, operational): a QUEUED/RUNNING run whose heartbeat is older than this is presumed dead
     # and is marked INTERRUPTED when its owner next starts a run.
     backtest_job_heartbeat_timeout_seconds: int = Field(default=600, gt=0)
+    # Agent (Phase 5, operational): after this many consecutive failed cycles a RUNNING/PAUSED agent enters ERROR; a
+    # RUNNING/PAUSED agent whose last cycle is older than the stale threshold is reported WORKER_NOT_SEEN.
+    agent_max_consecutive_failures: int = Field(default=3, gt=0)
+    agent_worker_stale_after_seconds: int = Field(default=900, gt=0)
 
     # ---- Phase 4: execution price gate (open decision D4) --------------------------------
     # Fail-closed defaults: no source, no approved basis, no approved provider. With these

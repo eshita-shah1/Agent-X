@@ -39,7 +39,6 @@ interface TradeHistoryTableProps {
 
 export function TradeHistoryTable({ onSelectTrade }: TradeHistoryTableProps) {
   const trades = useAppStore((s) => s.trades);
-  const agentStatus = useAppStore((s) => s.agentStatus);
   const numberFormat = useAppStore((s) => s.settings.regional.numberFormat);
 
   const [tab, setTab] = useState<TabFilter>('all');
@@ -67,12 +66,6 @@ export function TradeHistoryTable({ onSelectTrade }: TradeHistoryTableProps) {
   const safePage = Math.min(page, totalPages);
   const pageRows = filteredTrades.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  const statusText =
-    agentStatus === 'running'
-      ? 'Agent running'
-      : agentStatus === 'halted'
-        ? 'Agent halted'
-        : 'Agent idle';
 
   return (
     <Card className="p-5">
@@ -84,23 +77,14 @@ export function TradeHistoryTable({ onSelectTrade }: TradeHistoryTableProps) {
             <span className="font-normal text-[#71717A]">Trade history</span>
           </h2>
           <p className="mt-0.5 text-[11.5px] text-[#71717A]">
-            Every execution, in one place.
+            Demo data generated in the browser: these are not agent records or simulated fills.
           </p>
         </div>
 
         <div className="inline-flex items-center gap-2 rounded-full border border-[#E4E4E7] bg-[#F9FAFB] px-3 py-1 text-[11.5px] text-[#52525B]">
-          <span
-            className={cn(
-              'h-2 w-2 rounded-full',
-              agentStatus === 'running'
-                ? 'bg-[#16A34A]'
-                : agentStatus === 'halted'
-                  ? 'bg-[#DC2626]'
-                  : 'bg-[#71717A]'
-            )}
-          />
+          <span className="h-2 w-2 rounded-full bg-[#F59E0B]" />
           <span>
-            {statusText} · {openCount} position{openCount === 1 ? '' : 's'} open
+            DEMO DATA · {openCount} mock position{openCount === 1 ? '' : 's'}
           </span>
         </div>
       </div>

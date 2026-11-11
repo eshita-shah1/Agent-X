@@ -10,7 +10,8 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[2] / "app" / "strategies"
 BACKEND = PACKAGE.parents[1]
 STDLIB_ALLOWED = {"__future__", "dataclasses", "datetime", "enum", "sys", "types", "typing"}
 APP_ALLOWED = ("app.strategies", "app.indicators", "app.marketdata.calendar")
-FILES = {"__init__.py", "base.py", "params.py", "orb.py", "vwap.py", "ema_crossover.py", "rsi_bollinger.py", "supertrend.py", "registry.py"}
+# configs.py: JSON -> configuration/policy and the warm-up rule, shared by the backtest and the agent (Phase 5, D13)
+FILES = {"__init__.py", "base.py", "params.py", "orb.py", "vwap.py", "ema_crossover.py", "rsi_bollinger.py", "supertrend.py", "registry.py", "configs.py"}
 
 
 def imported_modules(path: pathlib.Path) -> set[str]:
