@@ -1,34 +1,31 @@
 # Phase 4 — Risk Engine and Mock Exchange
 
-Status: **implemented and tested, NOT approved; held pending review.** Rebased onto Phase 2 (`main` @ 8cc2a8f)
-on branch `phase-4-risk-exchange`, submitted as a pull request for review. Simulated fills are **blocked by default** until
-decision D4 is made (below).
+Status: the base implementation was merged in PR #1 (with Phase 2). This follow-up adds three things:
+the **next-bar-open execution model**, the **Indian-equity component cost model** and **risk-state refresh**.
+Simulated fills stay **blocked by default** until decision D4 is made (below).
 
-## 0. Review status (2026-11-11)
+## 0. Review status
 
 | Item | Outcome |
 |---|---|
 | D4: execution-price source | **Not approved.** Yahoo Finance remains unapproved. A verified provider with quotes/trades is preferred. |
-| Fee and slippage assumptions | Remain mandatory configuration. A documented Indian-equity cost model (brokerage, exchange charges, taxes, slippage), shared by backtesting, benchmarking and paper trading, is to be agreed. |
-| Approve and commit Phase 4 | **On hold** pending review and integration with Phase 2. |
+| Fee and slippage assumptions | Mandatory configuration with **no defaults**. The component model is implemented (section 3.3); its rates remain an owner decision. |
+| Phase 4 base | Merged (PR #1). |
 
-Review findings accepted against this implementation:
-1. **Same-bar fill risk.** `CandleCloseExecutionPriceSource` fills at the close of the latest
-   finalized bar. That is the bar a strategy would use for its signal, so filling at its close
-   is optimistic and is a same-bar lookahead risk. If bar-based execution is ever approved, the
-   proposed model is: **fill at the open of the next finalized bar that starts after the order
-   was accepted**, with documented slippage and gap handling. This is a simulation assumption,
-   not evidence of a real fill. Not implemented, pending approval.
-2. **Contract reconciliation: done** (section 5a). Phase 4 was first built against the Phase 1 `candles`
-   table; it has since been rebased onto Phase 2 and adapted to its schema and decisions.
-3. **Cost model structure.** The current generic model (fixed fee per order plus side-specific bps
-   and slippage bps) cannot represent every Indian-equity charge exactly. GST, for example, is
-   levied on brokerage + exchange + SEBI charges. A component model is to be agreed.
-4. **Risk-state staleness.** Day-start and peak equity update only on order submission. This is
-   acceptable for now, but it must be fixed before autonomous monitoring (Phase 5): risk metrics
-   must refresh without a new order.
-5. Synthetic fixture tests prove the execution logic under test conditions only, not the
-   suitability of any real provider's data.
+Review findings and their resolution:
+1. **Same-bar fill risk: resolved.** The candle-close source is removed (`EXECUTION_PRICE_SOURCE=candle_close` is
+   now invalid configuration). Orders never fill at submission. They fill at the **open of the first finalized bar
+   that starts at or after acceptance**, with documented slippage and gap handling (section 3.2). This is a
+   simulation assumption, not evidence of a real fill.
+2. **Contract reconciliation with Phase 2: done** (section 5a).
+3. **Cost model structure: resolved.** Indian-equity components (brokerage with a per-order cap, side-specific
+   STT, exchange transaction charges, SEBI fee, buy-side stamp duty, GST on brokerage + charges), in a single
+   module that backtesting and the benchmark (Phase 6) must reuse. No rate is built in.
+4. **Risk-state staleness: resolved for Phase 4.** `RiskService.refresh` re-values the account and updates
+   peak and day-start equity without an order. It is called by `GET /risk/state`, `POST /exchange/process`, the
+   kill switch and every order submission. `last_equity_at` makes staleness visible. Phase 5 must call it on each cycle.
+5. Synthetic fixture tests prove the execution logic under test conditions only, not the suitability of any real
+   provider's data.
 6. Docker must be verified on the integration machine, not only on the development Mac.
 
 ## 1. Scope (from the repository phase plan)
@@ -47,42 +44,44 @@ dashboard metrics (Sharpe, profit factor, equity curve), round-trip trade record
 ## 2. Decision D4 — execution-price source
 
 ### Evidence
-- Phase 2 research (recorded in the master PRD, section 7.1): Yahoo `Close` is split-adjusted
-  even with `auto_adjust=False`; forming candles are returned; no guaranteed fixed delay;
-  float32 noise; inconsistent timezones.
-- Repository: every `candles` row defaults to `price_basis = UNVERIFIED_PROVIDER_NATIVE`. A
-  check constraint forbids a verified label without `basis_verified_by` evidence. No code in
-  this repository ingests or verifies provider data.
+- Phase 2 research (master PRD section 7.1, docs/MARKET_DATA.md): Yahoo `Close` is split-adjusted even with
+  `auto_adjust=False`; forming candles are returned; no guaranteed fixed delay; float32 noise.
+- Every archived candle is `price_basis = UNVERIFIED_PROVIDER_NATIVE`. A check constraint forbids a verified
+  label without `basis_verified_by` evidence. Nothing in the repository verifies provider data.
 - Therefore **no verified execution-price source exists**.
 
 ### Decision implemented
-- Execution prices come only through the `ExecutionPriceSource` contract and must pass the
-  `ExecutionPriceGate` (`backend/app/exchange/pricing.py`).
-- Default configuration enables **no source** and approves **no basis and no provider**, so
-  every order is rejected with `NO_ELIGIBLE_PRICE: SOURCE_DISABLED` and nothing is filled.
-- `UNVERIFIED_PROVIDER_NATIVE` can never be approved. This is enforced three ways: the
-  configuration validator refuses it, the gate rejects it unconditionally, and a database
-  check constraint (`ck_fills_price_basis_verified`) refuses to store such a fill.
-- Yahoo data has **not** been relabelled. Historical closes are never used as live prices:
-  the only source reads the latest *finalized*, *fresh* bar for *one* approved provider.
+- Market data reaches the exchange only through the `ExecutionPriceSource` contract and the `ExecutionPriceGate`
+  (`backend/app/exchange/pricing.py`). There are two uses, kept separate:
+  - **Reference price**: the close of the latest finalized bar. It is used for decisions, risk sizing, cash
+    reservation, marks and protective-exit triggers. It must be fresh. It is **never a fill price**.
+  - **Fill bars**: finalized bars starting at or after an order's `accepted_at`. Fills happen only on these bars.
+- Default configuration enables **no source** and approves **no basis and no provider**. Every order is therefore
+  rejected with `NO_ELIGIBLE_PRICE: SOURCE_DISABLED` and nothing fills.
+- `UNVERIFIED_PROVIDER_NATIVE` can never be approved. Three layers enforce this: the configuration validator, the gate,
+  and the check constraint `ck_fills_price_basis_verified`.
+- Yahoo data has **not** been relabelled.
 
-### Acceptance requirements for any execution price (gate)
-1. A source is explicitly enabled.
+### Acceptance requirements (reference prices and fill bars)
+1. A source is explicitly enabled (`EXECUTION_PRICE_SOURCE=next_bar_open`).
 2. The instrument matches.
 3. Timestamps are timezone-aware.
-4. The price is positive.
-5. The observation is final (no forming candles).
-6. It is not later than the decision time (`as_of` and `observed_at` ≤ now); no lookahead.
-7. It is fresh: age ≤ `EXECUTION_MAX_PRICE_AGE_SECONDS` (900 s, **provisional**).
-8. The basis is verified **and** listed in `EXECUTION_APPROVED_PRICE_BASES`.
-9. The provider is listed in `EXECUTION_APPROVED_PROVIDERS` (exactly one for `candle_close`).
+4. Prices are positive.
+5. The bar is final and canonical (Phase 2: first observation).
+6. The bar ended and was observed by the decision time; no lookahead. A fill bar must also have started at or
+   after acceptance.
+7. The basis is verified **and** listed in `EXECUTION_APPROVED_PRICE_BASES`.
+8. The provider is the single entry in `EXECUTION_APPROVED_PROVIDERS`.
+9. Reference prices only: age ≤ `EXECUTION_MAX_PRICE_AGE_SECONDS` (900 s, **provisional**).
+
+If any fill bar fails a check, iteration stops at that bar. A later bar is never used to skip over an ineligible one.
 
 ### What the owner must decide to enable fills
-1. Which provider's data will be verified, and how (the verification procedure that justifies
-   setting `price_basis = AS_TRADED_VERIFIED` with `basis_verified_by` evidence).
-2. Whether "close of the latest finalized 5-minute bar" is an acceptable execution proxy, or
-   whether a quote/LTP source is required (a new `ExecutionPriceSource` implementation).
-3. Fee and slippage assumptions (the four `EXCHANGE_*` cost settings).
+1. Which provider's data will be verified, and how: the verification procedure that justifies
+   `price_basis = AS_TRADED_VERIFIED` with `basis_verified_by` evidence. If a quote/LTP source is preferred over
+   bars, it needs a new `ExecutionPriceSource` implementation.
+2. Whether the next-bar-open model (section 3.2) is an acceptable simulation assumption.
+3. The nine cost rates (section 3.3), for the product (intraday or delivery) being simulated.
 
 ## 3. Architecture
 
@@ -90,179 +89,240 @@ dashboard metrics (Sharpe, profit factor, equity curve), round-trip trade record
 Strategy / agent / API  ──OrderIntent──▶  OrderService (app/orders)
                                               │ 1. idempotency (client_order_id + fingerprint)
                                               │ 2. static validation (instrument, qty, lot, tick)
-                                              │ 3. ExecutionPriceGate.check(instrument)
-                                              │ 4. RiskService.snapshot  → risk.engine.evaluate (pure)
+                                              │ 3. ExecutionPriceGate.check (fresh reference price)
+                                              │ 4. RiskService.snapshot → risk.engine.evaluate (pure)
                                               │ 5. RiskDecision row (append-only)
                                               ▼
-                                         MockExchange (app/exchange)
-                                              │ independent re-validation: instrument, costs,
-                                              │ kill switch, price gate, held qty, cash
-                                              │ reserve cash → fill → ledger → position
+                                         MockExchange.submit
+                                              │ independent re-validation; reserve cash;
+                                              │ order rests PENDING (accepted_at = trading clock)
                                               ▼
-                       orders · fills · cash_ledger · positions   (one transaction)
+           POST /exchange/process ──▶   MockExchange.process_open_orders
+           (Phase 5 loop later)               │ fill bars after accepted_at → fill → ledger → position
+                                              │ DAY expiry; then RiskService.refresh
+                                              ▼
+                       orders · fills · cash_ledger · positions · risk_state   (one transaction)
 ```
 
 - **Pure modules** (no DB, no clock): `risk/engine.py`, `exchange/costs.py`, `exchange/accounting.py`.
-- **Single transaction** per operation under `SELECT … FOR UPDATE` on the user's
-  `virtual_accounts` row; services never commit, the endpoint commits once.
+- **Single transaction** per operation, under `SELECT … FOR UPDATE` on the user's `virtual_accounts` row.
+  Services never commit; the endpoint commits once.
 - **Strategies never touch balances.** Phase 3/5 code must call `OrderService.submit`.
 
-### Hybrid risk rules (`risk/engine.py`)
-User limits are hard limits; a strategy may only tighten `max_risk_per_trade_pct`
-(`OrderIntent.strategy_max_risk_pct`; effective = min). An entry must carry a stop-loss
-below the entry price. Approved size = min(proposal, risk cap, allocation cap, exposure cap,
-cash cap, quantity cap), rounded down to the lot size. If that is smaller than the proposal:
-`RESIZED` when `resize_allowed`, else `REJECTED`. Drawdown and daily-loss breaches, the kill
-switch, missing settings and missing prices reject entries. Exits (SELL of a held long) are
-allowed under the kill switch and breached loss limits because they reduce risk.
+### 3.1 Hybrid risk rules (`risk/engine.py`)
+- User limits are hard limits. A strategy may only tighten `max_risk_per_trade_pct`
+  (`OrderIntent.strategy_max_risk_pct`; the effective limit is the minimum of the two).
+- An entry must carry a stop-loss below the entry price.
+- Approved size = min(proposal, risk cap, allocation cap, exposure cap, cash cap, quantity cap), rounded down to
+  the lot size. The cash cap includes every fee (`CostModel.max_buy_quantity`).
+- If the approved size is smaller than the proposal, the order is `RESIZED` when `resize_allowed`, else `REJECTED`.
+- Entries are rejected on drawdown or daily-loss breaches, the kill switch, missing settings or missing prices.
+- Exits (SELL of a held long) are allowed under the kill switch and breached loss limits, because they reduce risk.
+- The order's **`risk_budget`** = equity × effective risk % (the hard limit in money). The exchange caps fills
+  with it (section 3.2).
 
-### Execution semantics (documented assumptions)
+### 3.2 Execution model: next bar open (documented simulation assumptions)
+- **No fill at submission.** An accepted order is `PENDING`. `accepted_at` comes from the trading clock. Only
+  finalized bars with `bar_start >= accepted_at` can fill it, so the bar a decision was based on never can.
+- **MARKET**
+  - Fills at the open of the **immediately next** bar (`bar_start` in `[accepted_at, accepted_at + timeframe)`),
+    with adverse slippage. Immediate-or-cancel: any unfilled remainder is cancelled.
+  - If that bar is missing (data gap), or the next bar is in a later session (overnight gap), the order is
+    **cancelled** (`NEXT_BAR_UNAVAILABLE`) rather than filled at a later price.
+- **LIMIT** (DAY validity)
+  - Evaluated bar by bar, in time order.
+  - BUY fills at `min(slipped open, limit)` when the bar opens at or below the limit. Otherwise it fills at the
+    limit when the bar's low trades **strictly** below it (`BAR_LIMIT_CROSS`). Touching the limit is not a fill.
+  - SELL is symmetric.
+  - The order expires (`DAY_ORDER_EXPIRED`) when its session ends. It never fills on a later session's bar.
+- **Gaps on entries**
+  - A BUY whose fill price is at or below its stop is cancelled (`GAP_THROUGH_STOP`).
+  - BUY fills are capped so that (fill price − stop) × quantity stays within `risk_budget`. The remainder is
+    cancelled (`RISK_BUDGET`).
+  - BUY fills are also capped by available cash at the fill price (`INSUFFICIENT_CASH_AT_FILL`).
+- **Partial fills** happen only when `EXCHANGE_MAX_VOLUME_PARTICIPATION` is set. A bar fills an order at most
+  once (`uq_fills_order_price_source_ref`).
+- **Protective exits** (`OrderService.run_protective_exits`): triggered when the latest finalized bar's low
+  reached the stop, or its high reached the take-profit. The exit is a MARKET SELL, so it fills at the **next
+  bar's open**, including any gap. Gaps are never filled at the stop price.
 - Cash account, **long-only**; short selling is rejected.
-- MARKET = immediate-or-cancel against the current eligible observation.
-- LIMIT fills when marketable, at the slipped price capped by the limit; otherwise it rests
-  until `MockExchange.process_open_orders` (not scheduled; Phase 5 decides when to call it).
-- Partial fills only when `EXCHANGE_MAX_VOLUME_PARTICIPATION` is set; one observation fills an
-  order at most once (`uq_fills_order_price_source_ref`).
-- Costs: fixed fee once per order (on its first fill) + side-specific bps of turnover; adverse
-  slippage in bps. Prices rounded against the trader to 6 dp; fees rounded up to 6 dp.
-- No execution delay is modelled.
-- Protective exits: `OrderService.run_protective_exits` sells positions whose eligible price
-  crossed the stop or take-profit, at the market observation (gaps are not filled at the stop).
 
-### Accounting
-- Cash = `initial_capital + SUM(cash_ledger.amount)`. The ledger is append-only, so there is
-  no mutable balance. `initial_capital` is never modified (Phase 1 trigger).
-- Average entry price is volume-weighted, excludes fees, and is kept at 10 dp. Realized P&L
-  is gross of fees; fees are tracked per position.
-- Unrealized P&L and equity are computed only from gate-eligible marks; otherwise they are
-  reported as `null` with the reason, never estimated.
+### 3.3 Cost model (`exchange/costs.py`; shared with backtesting and the benchmark)
 
-## 4. Database (migration `0004`, additive only; revises Phase 2's `0003`)
+```
+brokerage  = min(BROKERAGE_BPS × turnover, BROKERAGE_MAX_PER_ORDER − brokerage already charged on the order)
+stt        = turnover × STT_{BUY|SELL}_BPS
+txn_charge = turnover × TXN_CHARGE_BPS
+sebi_fee   = turnover × SEBI_FEE_BPS
+stamp_duty = turnover × STAMP_DUTY_BUY_BPS            (BUY only)
+gst        = (brokerage + txn_charge + sebi_fee) × GST_PCT / 100
+slippage   = adverse SLIPPAGE_BPS on the reference price of the fill
+```
+
+- No rate has a default, because rates depend on product, broker and date. While any rate is unset, orders are
+  rejected with `COSTS_NOT_CONFIGURED`, and `/exchange/status` lists the missing settings.
+- Each fill stores `fee_breakdown` and a snapshot of the cost model.
+- Rounding goes against the trader: prices are quantized to 6 dp (BUY up, SELL down), and each fee component is
+  rounded up to 6 dp.
+- `max_buy_quantity` returns a quantity whose worst-case total cost provably fits the cash. It is property-tested.
+
+### 3.4 Risk-state refresh (`RiskService.refresh`)
+- Re-values the account using eligible marks only.
+- Updates `peak_equity`, the session's `day_start_equity`, `last_equity` and `last_equity_at`.
+- Reports `equity`, `drawdown_pct`, `daily_loss_pct` and `breaches`.
+- No order is needed. It runs on `GET /risk/state`, `POST /exchange/process`, kill-switch changes and every
+  submission.
+
+### 3.5 Accounting
+- Cash = `initial_capital + SUM(cash_ledger.amount)`. The ledger is append-only, so there is no mutable balance.
+  `initial_capital` is never modified (Phase 1 trigger).
+- Average entry price is volume-weighted, excludes fees and is kept at 10 dp. Realized P&L is gross of fees;
+  fees are tracked per position.
+- Unrealized P&L and equity are computed only from gate-eligible marks. Otherwise they are reported as `null`
+  with the reason, never estimated.
+
+## 4. Database
+
+**Migration `0004`** (additive; revises Phase 2's `0003`):
 
 | Table | Purpose | Guards |
 |---|---|---|
 | `risk_settings` | user hard limits, no defaults | range checks, one row per user |
-| `risk_state` | kill switch, peak equity, day-start equity | one row per user |
-| `orders` | every order including rejected ones | unique `(user_id, client_order_id)`; status/fill consistency checks; trigger: no delete, terminal states frozen, identity immutable, fills never shrink |
-| `fills` | executions with full price provenance + cost snapshot | append-only; unique `(order_id, seq)`, `(order_id, price_source_ref)`; basis ≠ UNVERIFIED; observation ≤ execution time |
+| `risk_state` | kill switch, peak / day-start / last equity | one row per user |
+| `orders` | every order, including rejected ones | unique `(user_id, client_order_id)`; status/fill consistency checks; trigger: no delete, terminal states frozen, identity immutable, fills never shrink |
+| `fills` | executions with full price provenance and cost snapshot | append-only; unique `(order_id, seq)`, `(order_id, price_source_ref)`; basis ≠ UNVERIFIED; observation ≤ execution time |
 | `cash_ledger` | cash movements per fill | append-only; sign matches type; unique `(fill_id, entry_type)` |
-| `positions` | long-only holdings + realized P&L | `quantity ≥ 0`; avg price iff open |
+| `positions` | long-only holdings and realized P&L | `quantity ≥ 0`; avg price iff open |
 | `risk_decisions` | every risk evaluation (PRD 4.3) | append-only |
 
-All are user-owned (`UserOwnedMixin`) and registered in `test_every_table_is_classified`.
-No existing table or migration was modified. Like `0003`, downgrading `0004` is **refused while any
-trading record exists** (orders, fills, ledger, positions, risk settings/state/decisions).
+**Migration `0005`** (additive; revises `0004`):
+- `orders.accepted_at`: NOT NULL. Existing rows are backfilled from `created_at`, with the guard trigger disabled
+  for that single statement inside the migration transaction.
+- `orders.risk_budget`: nullable, ≥ 0.
+- `fills.fee_breakdown`: JSONB, default `{}`.
+- `risk_state.last_equity` and `risk_state.last_equity_at`.
+- The order guard trigger is replaced so that `accepted_at` and `risk_budget` are immutable too.
+
+All Phase 4 tables are user-owned (`UserOwnedMixin`) and classified in `test_every_table_is_classified`.
+Downgrades are **refused while data would be lost**: `0005` refuses while orders or fills exist; `0004` refuses
+while any trading record exists. This is the same convention as `0003`.
 
 ## 5a. Integration with Phase 2 (reconciled)
 
 | Phase 2 fact | Phase 4 adaptation |
 |---|---|
-| Migration `0003_market_data_foundation` | Phase 4 migration renumbered to `0004` (revises `0003`) |
-| `candles` versioning: first observation canonical, restatements non-canonical | Execution source reads `is_canonical = true` only; a restated value is never an execution price (tested; mutation-checked) |
-| Only final bars are archived (`ck_candles_only_finalized_archived`) | Kept the `is_final` filter as defence in depth; forming-candle cases now covered by the DB constraint + gate unit tests |
-| Candles require provider symbol + ingestion batch | Test fixtures create a fixture job/batch |
-| `instruments.trading_status` / `disabled_reason`; futures forced DISABLED | Orders for a DISABLED instrument are rejected `INSTRUMENT_DISABLED: <reason>` (pipeline and exchange) |
-| `_enum` helper renamed `enum_type` | Phase 4 models use `enum_type` |
-| `app.state.clock` set by `create_app` | Phase 4 endpoints use the same `app.state.clock` |
-| `MARKETDATA_STALE_AFTER_MINUTES` is *descriptive only*; trading use needs separate review | Phase 4 keeps its own gate threshold `EXECUTION_MAX_PRICE_AGE_SECONDS` (provisional 900 s); it does not reuse the descriptive Phase 2 setting |
-| Decision 1: execution-price source deferred to Phase 4 | Still unapproved; no candle is relabelled; no application code assigns a verified basis (Phase 2 policy test still passes) |
+| Migration `0003_market_data_foundation` | Phase 4 migrations are `0004` and `0005` |
+| Restatements are non-canonical | Sources read `is_canonical = true` only (tested; mutation-checked) |
+| Only final bars are archived | The `is_final` filter is kept as defence in depth |
+| `instruments.trading_status`; futures forced DISABLED | Orders for a DISABLED instrument are rejected `INSTRUMENT_DISABLED` |
+| `app.state.clock` | Phase 4 endpoints use the same clock |
+| `MARKETDATA_STALE_AFTER_MINUTES` is descriptive only | Phase 4 keeps its own `EXECUTION_MAX_PRICE_AGE_SECONDS` |
+| `timeframe_minutes` (calendar) | Reused for the next-bar window; the execution timeframe must be intraday |
+| Decision 1: execution-price source deferred to Phase 4 | Still unapproved; no candle is relabelled |
 
-Phase 2-owned tests changed (minimal, intent-preserving):
-- `tests/integration/test_market_schema.py`: the refused-downgrade test now asserts the revision is *unchanged*
-  instead of hard-coding `"0003"` (head is now `0004`).
-- `tests/marketdata/test_phase2_policies.py`: the "no execution code exists" guard is narrowed. Phase 4's
-  `exchange/`, `orders/`, `risk/` packages are allowed; later-phase packages (`strategies`, `agent`, `backtest`,
-  `execution`, `mock_exchange`) stay forbidden, and `app/marketdata` must still contain no order/execution code.
+Phase 2-owned tests changed in PR #1 (minimal, intent-preserving): `test_market_schema.py` (no hard-coded head
+revision) and `test_phase2_policies.py` (the no-execution-code guard allows the Phase 4 packages; later-phase
+packages and execution code in `app/marketdata` stay forbidden).
 
-## 5. Shared contracts for the other Claude instance
+## 5. Shared contracts
 
-**Phase 2 (market data)**: please review before merging.
-- To feed execution, implement `ExecutionPriceSource` (`latest(instrument_id) -> ExecutionQuote | None`)
-  or keep writing `candles` rows that `CandleCloseExecutionPriceSource` can read
-  (`is_final`, UTC `bar_end_ts`, `observed_at`, `price_basis`, provider via `data_providers.code`).
-- Phase 4 adds **no** files under `app/marketdata/` and no market-data config keys. Its keys
-  are prefixed `EXECUTION_*` / `EXCHANGE_*` to avoid collisions with Phase 2's
-  finalization/stale/failure settings.
-- Phase 4 **reads** `candles` and `data_providers`; it never writes them.
-- The source filters canonical rows (Phase 2 restatement policy); see section 5a.
+**Market data (Phase 2 or a future provider)**
+- Implement `ExecutionPriceSource`, or keep writing `candles` rows that `CandleBarSource` can read.
+- Phase 4 **reads** `candles` and `data_providers`; it never writes them, and it adds no market-data config keys.
 
 **Phase 3/5 (strategies, agent)**
-- Submit with `OrderService(TradingContext.build(db, settings, clock)).submit(user_id, OrderIntent(...))`
-  using `source=OrderSource.AGENT`, a stable `strategy_id`, a deterministic `client_order_id`
-  (idempotency), a `stop_loss_price` for entries, and optionally `strategy_max_risk_pct`.
-- Call `MockExchange.process_open_orders` and `OrderService.run_protective_exits` from the
-  orchestration loop. Phase 4 schedules nothing.
+- Submit with `OrderService(TradingContext.build(db, settings, clock)).submit(user_id, OrderIntent(...))`.
+  Use `source=OrderSource.AGENT`, a stable `strategy_id`, a deterministic `client_order_id`, a `stop_loss_price`
+  for entries and, optionally, `strategy_max_risk_pct`.
+- On every cycle, call `ctx.exchange.process_open_orders(account)`, then `ctx.risk.refresh(account)` and
+  `OrderService.run_protective_exits(user_id)`. Call `refresh` at session start. Phase 4 schedules nothing.
+- Backtesting (Phase 6) must use `app.exchange.costs.CostModel` and the same next-bar-open semantics, so that
+  paper trading and backtests agree.
 
 ### Exact signatures (as implemented)
 
 ```python
-# app/exchange/pricing.py — what Phase 2 provides (or satisfies via `candles` rows)
+# app/exchange/pricing.py
 @dataclass(frozen=True)
-class ExecutionQuote:
+class ExecutionQuote:            # reference price (latest finalized bar close); never a fill price
     instrument_id: int
-    price: Decimal            # never float
-    as_of: datetime           # tz-aware UTC data time (bar end for a candle)
-    observed_at: datetime     # tz-aware UTC time Agent-X received it
-    provider_code: str        # data_providers.code
-    price_basis: PriceBasis   # must be verified + approved to execute
+    price: Decimal
+    as_of: datetime              # tz-aware UTC (bar end)
+    observed_at: datetime
+    provider_code: str
+    price_basis: PriceBasis
     is_final: bool
-    kind: QuoteKind           # currently only CANDLE_CLOSE
-    source_ref: str           # stable observation id, e.g. "candle:123" (dedupes fills)
+    kind: QuoteKind              # LATEST_BAR_CLOSE
+    source_ref: str              # e.g. "candle:123"
     volume: int | None = None
+    low: Decimal | None = None   # bar range for protective-exit triggers
+    high: Decimal | None = None
+
+@dataclass(frozen=True)
+class ExecutionBar:              # a bar an order may fill against
+    instrument_id: int
+    bar_start: datetime
+    bar_end: datetime
+    session_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+    observed_at: datetime
+    provider_code: str
+    price_basis: PriceBasis
+    is_final: bool
+    source_ref: str
 
 class ExecutionPriceSource(Protocol):
     name: str
     enabled: bool
-    def latest(self, instrument_id: int) -> ExecutionQuote | None: ...   # must not fabricate
+    def latest(self, instrument_id: int) -> ExecutionQuote | None: ...
+    def bars_from(self, instrument_id: int, start: datetime) -> list[ExecutionBar]: ...   # oldest first
 
-# Columns CandleCloseExecutionPriceSource reads (read-only):
-#   candles: instrument_id, provider_id, timeframe, bar_start_ts, bar_end_ts, close, volume,
-#            is_final, is_canonical, observed_at, price_basis, id
-#   data_providers: id, code
-# Filter: one approved provider, timeframe = EXECUTION_CANDLE_TIMEFRAME, is_final, is_canonical,
-#         bar_end_ts <= now, observed_at <= now; latest by bar_start_ts.
+# CandleBarSource reads (read-only): candles(instrument_id, provider_id, timeframe, bar_start_ts, bar_end_ts,
+#   session_date, open, high, low, close, volume, is_final, is_canonical, observed_at, price_basis, id),
+#   data_providers(id, code). Filter: one approved provider, EXECUTION_CANDLE_TIMEFRAME, is_final, is_canonical,
+#   bar_end_ts <= now, observed_at <= now.
 
-# app/exchange/types.py — what Phase 3/5 submit
+# app/exchange/types.py
 @dataclass(frozen=True)
 class OrderIntent:
     client_order_id: str              # 1-64 chars, deterministic per decision (idempotency key)
     instrument_id: int
     side: OrderSide                   # BUY | SELL (SELL only reduces a held long)
-    order_type: OrderType             # MARKET | LIMIT
+    order_type: OrderType             # MARKET | LIMIT (DAY)
     quantity: int                     # > 0, proposed; risk may resize
     source: OrderSource               # AGENT for Phase 5
     limit_price: Decimal | None = None
     stop_loss_price: Decimal | None = None      # required for BUY
     take_profit_price: Decimal | None = None
     strategy_id: str | None = None
-    strategy_max_risk_pct: Decimal | None = None  # strategy rule; can only tighten user limit
+    strategy_max_risk_pct: Decimal | None = None  # can only tighten the user limit
 
-# app/orders/service.py — the only order entry point
+# app/orders/service.py and friends
 ctx = TradingContext.build(db: Session, settings: Settings, clock: Callable[[], datetime])
-OrderService(ctx).submit(user_id: UUID, intent: OrderIntent) -> SubmitResult(order, replayed, decision)
-OrderService(ctx).run_protective_exits(user_id: UUID) -> list[SubmitResult]
-ctx.exchange.process_open_orders(account: VirtualAccount) -> list[Order]
-# Errors: IdempotencyConflict (same id, different request), InvalidOrder (static validation).
-# Transactions: services flush, never commit; the caller commits once or rolls back.
+OrderService(ctx).submit(user_id, intent) -> SubmitResult(order, replayed, decision)   # order is PENDING or REJECTED
+OrderService(ctx).run_protective_exits(user_id) -> list[SubmitResult]
+ctx.exchange.process_open_orders(account) -> list[Order]       # orders that changed
+ctx.risk.refresh(account) -> RiskStatus(state, equity, drawdown_pct, daily_loss_pct, breaches)
+CostModel.from_settings(settings) -> CostModel | None           # None while any rate is unset
+# Errors: IdempotencyConflict, InvalidOrder. Services flush, never commit; the caller commits once or rolls back.
 ```
-
-**Shared-file edits made by Phase 4** (all additive): `app/core/config.py` (new settings),
-`app/db/enums.py` (new enums), `app/db/models/__init__.py` (exports), `app/api/v1/router.py`
-(one `include_router`), `tests/integration/test_isolation.py` (table classification).
 
 ## 6. Known limitations
 
-- **Fills cannot happen in any real configuration yet** (D4). All fill behaviour is verified
-  with synthetic fixture candles explicitly labelled as test fixtures.
-- The candle-close proxy is unvalidated as an execution price; it is gated off by default.
-- The day-start and peak equity references only update when equity is evaluated (at
-  order submission). Without a scheduler they can understate moves between evaluations.
-- Risk per trade excludes fees; exposure uses reserved cash (incl. fees) for open BUYs.
-- Tick-size validation applies only when `instruments.tick_size` is known (it is never
-  invented). Lot size is enforced only when known.
-- No market-hours or holiday calendar check. Orders outside sessions are blocked indirectly,
-  because data is stale.
-- No short selling, margin, intraday square-off, or corporate-action handling of open positions.
-- `/api/v1/orders` is user-triggered (manual). Operator-only restrictions for hosted
-  deployment are not implemented (same posture as Phase 1).
-- Docker was verified on the development Mac only (before the Phase 2 rebase; re-verified after, see the PR).
+- **Fills cannot happen in any real configuration yet** (D4). All fill behaviour is verified with synthetic
+  fixture bars and synthetic cost rates, both labelled as fixtures.
+- The next-bar-open model is a simulation assumption. It does not model queue position, intrabar sequencing
+  beyond open/low/high, or auctions.
+- The day-start reference is the equity at the first refresh on a session date. Phase 5 must refresh at session
+  start; until then, `last_equity_at` shows how current the references are.
+- Per-trade risk excludes fees. Exposure uses reserved cash (fees included) for open BUYs.
+- Tick-size validation applies only when `instruments.tick_size` is known (never invented). Lot size is enforced
+  only when known.
+- No holiday calendar check (Phase 2 decision 4). Session boundaries use the exchange-local date of bars and the clock.
+- No short selling, margin, intraday square-off or corporate-action handling of open positions.
+- `/api/v1/orders` and `/api/v1/exchange/process` are user-triggered. Operator-only restrictions for hosted
+  deployment are not implemented (same posture as Phases 1 and 2).

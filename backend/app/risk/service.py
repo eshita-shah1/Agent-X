@@ -41,6 +41,15 @@ class RiskSettingsInput:
     resize_allowed: bool
 
 
+@dataclass(frozen=True)
+class RiskStatus:
+    state: RiskState
+    equity: Decimal | None
+    drawdown_pct: Decimal | None
+    daily_loss_pct: Decimal | None
+    breaches: list[str]
+
+
 def _settings_dict(s: RiskSettings) -> dict:
     return {f: (str(v) if isinstance(v := getattr(s, f), Decimal) else v) for f in _LIMIT_FIELDS}
 
@@ -119,9 +128,10 @@ class RiskService:
     def observe_equity(self, account: VirtualAccount, valuation: AccountValuation) -> RiskState:
         """Update the peak-equity and start-of-day references from a determined equity.
 
-        Limitation (documented): the day reference is the equity at the first evaluation on
-        a session date, and the peak only advances when equity is evaluated. With no
-        scheduler (Phase 5) these can understate intraday moves between evaluations.
+        Called on every order submission, every `process_open_orders` run and every `refresh` (GET
+        /risk/state, POST /exchange/process). Limitation (documented): the day reference is the equity at the
+        first evaluation on a session date. Phase 5 must call `refresh` at session start and on every cycle;
+        `last_equity_at` shows how current the references are.
         """
         state = self.get_state(account.user_id)
         assert state is not None
@@ -135,8 +145,37 @@ class RiskService:
             if state.day_session_date != today:
                 state.day_session_date = today
                 state.day_start_equity = equity
+            state.last_equity = equity
+            state.last_equity_at = self.clock()
         self.db.flush()
         return state
+
+    def refresh(self, account: VirtualAccount, limits: UserRiskLimits | None = None) -> "RiskStatus":
+        """Re-value the account and update the risk references without needing an order. Reports the current
+        drawdown and daily loss and which hard limits are breached (breaches block new entries; exits stay
+        allowed)."""
+        valuation = self.portfolio.valuation(account)
+        state = self.observe_equity(account, valuation)
+        limits = limits if limits is not None else self.limits(account.user_id)
+        equity = valuation.equity
+        dd = dl = None
+        if equity is not None and state.peak_equity:
+            dd = (state.peak_equity - equity) / state.peak_equity * 100
+        if equity is not None and state.day_start_equity:
+            dl = (state.day_start_equity - equity) / state.day_start_equity * 100
+        breaches = []
+        if state.kill_switch_engaged:
+            breaches.append("KILL_SWITCH_ENGAGED")
+        if equity is None:
+            breaches.append(f"EQUITY_UNDETERMINED: cannot mark instruments {valuation.unmarked_instrument_ids}")
+        if limits is not None:
+            if dd is not None and dd >= limits.max_drawdown_pct:
+                breaches.append(f"MAX_DRAWDOWN_BREACHED: {dd:.4f}% >= {limits.max_drawdown_pct}%")
+            if dl is not None and dl >= limits.max_daily_loss_pct:
+                breaches.append(f"DAILY_LOSS_LIMIT_BREACHED: {dl:.4f}% >= {limits.max_daily_loss_pct}%")
+        else:
+            breaches.append("RISK_SETTINGS_NOT_CONFIGURED")
+        return RiskStatus(state, equity, dd, dl, breaches)
 
     def snapshot(self, account: VirtualAccount, instrument_id: int) -> AccountRiskSnapshot:
         valuation = self.portfolio.valuation(account)

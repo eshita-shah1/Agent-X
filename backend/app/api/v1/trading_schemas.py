@@ -61,6 +61,7 @@ class FillResponse(BaseModel):
     price_as_of: datetime
     price_observed_at: datetime
     cost_model: dict
+    fee_breakdown: dict
     executed_at: datetime
 
 
@@ -108,6 +109,8 @@ class OrderResponse(BaseModel):
     cancel_reason: str | None
     reserved_cash: Decimal
     avg_fill_price: Decimal | None
+    accepted_at: datetime
+    risk_budget: Decimal | None
     created_at: datetime
     updated_at: datetime
 
@@ -158,14 +161,24 @@ class RiskSettingsResponse(BaseModel):
 
 
 class RiskStateResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     kill_switch_engaged: bool
     kill_switch_reason: str | None
     kill_switch_changed_at: datetime | None
     peak_equity: Decimal | None
     day_session_date: date | None
     day_start_equity: Decimal | None
+    last_equity: Decimal | None
+    last_equity_at: datetime | None
+    # Computed on this request (the references above are refreshed first).
+    equity: Decimal | None
+    drawdown_pct: Decimal | None
+    daily_loss_pct: Decimal | None
+    breaches: list[str]
+
+
+class ProcessResponse(BaseModel):
+    changed_orders: list["OrderResponse"]
+    risk: RiskStateResponse
 
 
 class KillSwitchRequest(BaseModel):
@@ -213,6 +226,7 @@ class PortfolioResponse(BaseModel):
 
 class ExchangeStatusResponse(BaseModel):
     execution_price_source: str
+    execution_model: str
     execution_enabled: bool
     approved_price_bases: list[PriceBasis]
     approved_providers: list[str]
@@ -220,3 +234,6 @@ class ExchangeStatusResponse(BaseModel):
     costs_configured: bool
     cost_model: dict | None
     blocking_reasons: list[str]
+
+
+ProcessResponse.model_rebuild()

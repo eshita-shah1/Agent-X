@@ -30,6 +30,7 @@ from app.exchange.portfolio import PortfolioReader
 from app.exchange.pricing import ExecutionPriceGate, build_price_gate
 from app.exchange.service import MockExchange, instrument_problem, lock_account
 from app.exchange.types import OrderIntent
+from app.marketdata.calendar import timeframe_minutes
 from app.risk.engine import RiskResult, TradeProposal, evaluate
 from app.risk.service import RiskService
 
@@ -68,7 +69,9 @@ class TradingContext:
         gate = gate or build_price_gate(settings, db, clock)
         costs = CostModel.from_settings(settings)
         portfolio = PortfolioReader(db, gate)
-        exchange = MockExchange(db, gate, costs, clock)
+        exchange = MockExchange(
+            db, gate, costs, clock, timeframe_minutes(settings.execution_candle_timeframe.value)
+        )
         return cls(db, clock, gate, costs, portfolio, exchange, RiskService(db, portfolio, clock))
 
 
@@ -116,7 +119,9 @@ class OrderService:
         result = evaluate(proposal, limits, snapshot, self.ctx.costs, price_check.ok, price_detail)
 
         if result.approved:
-            order = self.ctx.exchange.submit(account, intent, fingerprint, result.approved_quantity)
+            order = self.ctx.exchange.submit(
+                account, intent, fingerprint, result.approved_quantity, risk_budget=result.risk_limit_amount
+            )
         else:
             order = self.ctx.exchange.record_rejected(
                 account, intent, fingerprint, "RISK_REJECTED: " + "; ".join(result.reasons)
@@ -151,11 +156,15 @@ class OrderService:
             check = self.ctx.gate.check(pos.instrument_id)
             if not check.ok or check.quote is None:
                 continue
-            price = check.quote.price
+            q = check.quote
+            low = q.low if q.low is not None else q.price
+            high = q.high if q.high is not None else q.price
             trigger = None
-            if pos.stop_loss_price is not None and price <= pos.stop_loss_price:
+            # Triggered when the latest finalized bar traded through the level; the exit is a MARKET order that
+            # fills at the next bar's open (gaps are not filled at the stop price).
+            if pos.stop_loss_price is not None and low <= pos.stop_loss_price:
                 trigger = "SL"
-            elif pos.take_profit_price is not None and price >= pos.take_profit_price:
+            elif pos.take_profit_price is not None and high >= pos.take_profit_price:
                 trigger = "TP"
             if trigger is None:
                 continue
