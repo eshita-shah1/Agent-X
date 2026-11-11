@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     jwt_issuer: str = "agent-x"
     access_token_expire_minutes: int = Field(gt=0)
 
+    # --- Market data (Phase 2) -------------------------------------------------------------
+    # Values marked PROVISIONAL were retained by the owner for Phase 2. They influence when a bar counts as final
+    # and when data counts as stale. They only *describe* data: they are not guaranteed provider behaviour and
+    # not trading-risk rules, and need a separate review before any trading engine relies on them.
+    marketdata_provider: str = "yahoo"
+    # Measured 2026-11-11: bars settled within ~31 s after their end; 60 s is the provisional margin.
+    marketdata_finalization_margin_seconds: int = Field(default=60, ge=0)  # PROVISIONAL
+    marketdata_stale_after_minutes: int = Field(default=15, gt=0)  # PROVISIONAL
+    marketdata_provider_unavailable_after_failures: int = Field(default=3, gt=0)  # PROVISIONAL
+    # operational (not trading-relevant)
+    marketdata_incremental_overlap_hours: int = Field(default=24, ge=0)
+    marketdata_job_heartbeat_timeout_seconds: int = Field(default=300, gt=0)
+    marketdata_request_pause_seconds: float = Field(default=1.5, ge=0)
+
     @field_validator("jwt_secret_key")
     @classmethod
     def _secret_is_long_enough(cls, v: SecretStr) -> SecretStr:
