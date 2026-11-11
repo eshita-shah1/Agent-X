@@ -105,6 +105,8 @@ USER_OWNED_TABLES = {
     "cash_ledger",
     "positions",
     "risk_decisions",
+    "corporate_action_adjustments",  # migration 0007
+    "dividend_credits",  # migration 0008
 }
 
 
