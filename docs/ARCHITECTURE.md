@@ -37,7 +37,7 @@ Phase 4 added (details in [PHASE4.md](PHASE4.md)):
     risk/              engine (pure risk evaluation), service (settings, state, snapshot, kill switch)
     orders/            service (OrderService: intent -> risk -> exchange, one transaction)
     api/v1/trading.py  orders, portfolio, risk and exchange-status endpoints
-  alembic/versions/0004_risk_engine_and_mock_exchange.py
+  alembic/versions/0004_risk_engine_and_mock_exchange.py, 0005_next_bar_execution_and_component_fees.py
 ```
 
 ## Authentication
