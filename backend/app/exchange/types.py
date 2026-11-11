@@ -3,9 +3,10 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
-from app.db.enums import OrderSide, OrderSource, OrderType
+from app.db.enums import OrderSide, OrderSource, OrderType, Product
 
 
 def _dec(v: Decimal | None) -> str | None:
@@ -30,6 +31,11 @@ class OrderIntent:
     # Strategy-specific risk rule: the strategy's own maximum risk per trade (% of equity).
     # The effective limit is min(user limit, strategy limit); user limits always win.
     strategy_max_risk_pct: Decimal | None = None
+    # When the decision was made (tz-aware). Defaults to the acceptance time for manual orders; strategies (Phase 3/5)
+    # must pass the time of the bar their signal was computed from. Never later than acceptance.
+    signal_at: datetime | None = None
+    # Product whose cost rates apply. Only DELIVERY is executed today.
+    product: Product = Product.DELIVERY
 
     def fingerprint(self) -> str:
         """Stable hash of the request, so an idempotent retry can be told apart from a
@@ -45,5 +51,7 @@ class OrderIntent:
             "take_profit_price": _dec(self.take_profit_price),
             "strategy_id": self.strategy_id,
             "strategy_max_risk_pct": _dec(self.strategy_max_risk_pct),
+            "signal_at": self.signal_at.isoformat() if self.signal_at else None,
+            "product": self.product.value,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
