@@ -171,7 +171,7 @@ Full design and limitations: [BACKTESTING.md](BACKTESTING.md).
 - **Table classification.** The six tables are user-owned (`test_every_table_is_classified`). API queries go through `owned_select`, and another user's run is `404`.
 - **Accounts are read only.** A backtest reads the account's `initial_capital` as its default capital and never writes to the account.
 - **Time zones.** The engine normalises every bar timestamp to UTC and serialises explanations in UTC. Session logic stays in Asia/Kolkata. Results are therefore identical whatever zone the inputs, or the database session, used.
-- **Separate from Phase 4 execution.** No Phase 3 module imports the risk engine, Mock Exchange, order pipeline or operations code, and no Phase 4 execution module imports the backtest. A backtest never writes orders, fills, ledger entries or positions, and runs with execution disabled. The two simulation models differ, and aligning them is an open decision ([BACKTESTING.md](BACKTESTING.md) §9).
+- **Separate from Phase 4 execution.** No Phase 3 module imports the risk engine, Mock Exchange, order pipeline or operations code, and no Phase 4 execution module imports the backtest. A backtest never writes orders, fills, ledger entries or positions, and runs with execution disabled. The two simulation models differ by design, and are kept separate by decision ([BACKTESTING.md](BACKTESTING.md) §9).
 
 ## What is deliberately not here
 

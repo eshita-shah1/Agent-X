@@ -113,7 +113,7 @@ boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 1. **Phase 3:** strategy and backtesting layer, implemented and approved; integrated with Phase 4 (migration `0009`).
 2. **Phase 4:** risk engine and Mock Exchange, implemented. Fills stay simulation-only until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)).
-3. **Open decision:** whether to align the backtest's cost and fill model with the Mock Exchange's ([docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
+3. **Decided:** the backtest and the Mock Exchange keep separate simulation models (intraday research vs delivery paper execution; [docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
 4. **Phase 5:** agent orchestration.
 5. **Phase 7:** LLM explanations and trading journal. The LLM explains decisions only and never decides them.
 6. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
