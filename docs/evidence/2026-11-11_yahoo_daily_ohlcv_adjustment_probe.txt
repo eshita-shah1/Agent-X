@@ -1,0 +1,19 @@
+yfinance 1.8.0 run at 2026-11-11T12:28:12.023822+00:00
+
+RELIANCE.NS ex-date 2024-10-28; splits recorded: {datetime.date(2024, 10, 28): 2.0}
+  last pre-ex day 2024-10-25, first ex day 2024-10-28
+  Open      pre=     1343.5000 post=     1337.0000 post/pre=0.9952
+  High      pre=     1344.3500 post=     1353.0000 post/pre=1.0064
+  Low       pre=     1322.0000 post=     1322.1000 post/pre=1.0001
+  Close     pre=     1327.8500 post=     1334.3500 post/pre=1.0049
+  Adj Close pre=     1316.4808 post=     1322.9252 post/pre=1.0049
+  Volume    pre= 18597496.0000 post= 10824350.0000 post/pre=0.5820
+
+HDFCBANK.NS ex-date 2025-08-26; splits recorded: {datetime.date(2025, 8, 26): 2.0}
+  last pre-ex day 2025-08-25, first ex day 2025-08-26
+  Open      pre=      980.1000 post=      979.5000 post/pre=0.9994
+  High      pre=      988.7000 post=      985.7000 post/pre=0.9970
+  Low       pre=      978.5000 post=      968.0000 post/pre=0.9893
+  Close     pre=      982.0500 post=      973.4000 post/pre=0.9912
+  Adj Close pre=      966.0717 post=      957.5625 post/pre=0.9912
+  Volume    pre= 17518044.0000 post= 16917731.0000 post/pre=0.9657

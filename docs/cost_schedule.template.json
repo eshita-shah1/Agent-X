@@ -1,0 +1,39 @@
+{
+  "schedule_version": "<version, e.g. 2026-11-11.1>",
+  "currency": "INR",
+  "description": "TEMPLATE ONLY. Every <...> must be replaced by the value from the cited authority. This file is intentionally invalid until it is completed; no rate is provided by Agent-X.",
+  "rounding": [
+    {"charge_type": "BROKERAGE",  "stage": "<FILL|ORDER|SESSION|SESSION_INSTRUMENT>", "quantum": "<e.g. 0.01>", "mode": "<UP|DOWN|HALF_UP|HALF_EVEN>"},
+    {"charge_type": "STT",        "stage": "<...>", "quantum": "<...>", "mode": "<...>"},
+    {"charge_type": "TXN_CHARGE", "stage": "<...>", "quantum": "<...>", "mode": "<...>"},
+    {"charge_type": "SEBI_FEE",   "stage": "<...>", "quantum": "<...>", "mode": "<...>"},
+    {"charge_type": "IPFT",       "stage": "<...>", "quantum": "<...>", "mode": "<...>"},
+    {"charge_type": "STAMP_DUTY", "stage": "<...>", "quantum": "<...>", "mode": "<...>"},
+    {"charge_type": "DP_CHARGE",  "stage": "<...>", "quantum": "<...>", "mode": "<...>"},
+    {"charge_type": "GST",        "stage": "<...>", "quantum": "<...>", "mode": "<...>"}
+  ],
+  "rates": [
+    {"rate_id": "BRK-DEL-1", "product": "DELIVERY", "charge_type": "BROKERAGE", "side": "BOTH",
+     "basis": "<TURNOVER_BPS|TURNOVER_BPS_CAPPED_PER_ORDER|FLAT_PER_ORDER>", "value": "<from broker tariff>", "cap": "<only for CAPPED>",
+     "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<broker tariff reference and version>"},
+    {"rate_id": "STT-DEL-BUY-1", "product": "DELIVERY", "charge_type": "STT", "side": "BUY", "basis": "TURNOVER_BPS",
+     "value": "<bps>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<Finance Act / notification>"},
+    {"rate_id": "STT-DEL-SELL-1", "product": "DELIVERY", "charge_type": "STT", "side": "SELL", "basis": "TURNOVER_BPS",
+     "value": "<bps>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<Finance Act / notification>"},
+    {"rate_id": "TXN-DEL-1", "product": "DELIVERY", "charge_type": "TXN_CHARGE", "side": "BOTH", "basis": "TURNOVER_BPS",
+     "value": "<bps>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<NSE circular number>"},
+    {"rate_id": "SEBI-DEL-1", "product": "DELIVERY", "charge_type": "SEBI_FEE", "side": "BOTH", "basis": "TURNOVER_BPS",
+     "value": "<bps (convert from per-crore explicitly)>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<SEBI notification>"},
+    {"rate_id": "IPFT-DEL-1", "product": "DELIVERY", "charge_type": "IPFT", "side": "BOTH", "basis": "TURNOVER_BPS",
+     "value": "<bps>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<NSE IPFT circular>"},
+    {"rate_id": "STAMP-DEL-1", "product": "DELIVERY", "charge_type": "STAMP_DUTY", "side": "BUY", "basis": "TURNOVER_BPS",
+     "value": "<bps>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<Indian Stamp Act as amended>"},
+    {"rate_id": "DP-DEL-1", "product": "DELIVERY", "charge_type": "DP_CHARGE", "side": "SELL", "basis": "FLAT_PER_SCRIP_SELL_DAY",
+     "value": "<INR per scrip per sell day>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<depository + broker tariff>"},
+    {"rate_id": "GST-DEL-1", "product": "DELIVERY", "charge_type": "GST", "side": "BOTH", "basis": "PCT_OF_CHARGES",
+     "value": "<percent>", "applies_to": ["BROKERAGE", "TXN_CHARGE", "SEBI_FEE", "IPFT", "<DP_CHARGE if the broker applies GST to it>"],
+     "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<GST notification>"},
+    {"rate_id": "SLIP-DEL-1", "product": "DELIVERY", "charge_type": "SLIPPAGE", "side": "BOTH", "basis": "PRICE_BPS",
+     "value": "<owner-approved assumption>", "effective_from": "<YYYY-MM-DD>", "effective_to": null, "source": "<approval reference>"}
+  ]
+}

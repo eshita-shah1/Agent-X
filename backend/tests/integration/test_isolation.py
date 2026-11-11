@@ -97,7 +97,18 @@ GLOBAL_TABLES = {
 SYSTEM_TABLES = {"users", "audit_events", "data_ingestion_jobs"}
 USER_OWNED_TABLES = {
     "virtual_accounts",
-    # Phase 3 backtests: every result row carries its run's owner (an insert trigger requires it to match the run's)
+    # Phase 4: every risk, order and accounting record belongs to exactly one user.
+    "risk_settings",
+    "risk_state",
+    "orders",
+    "fills",
+    "cash_ledger",
+    "positions",
+    "risk_decisions",
+    "corporate_action_adjustments",  # migration 0007
+    "dividend_credits",  # migration 0008
+    # Phase 3 backtests (migration 0009): every result row carries its run's owner (an insert trigger requires it to
+    # match the run's)
     "backtest_runs", "backtest_instrument_results", "backtest_selection_decisions", "backtest_trades", "backtest_events",
     "backtest_equity_points",
 }

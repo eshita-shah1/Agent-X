@@ -26,7 +26,7 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | 1 | Backend foundation: FastAPI, PostgreSQL, Alembic, JWT auth, user isolation, base schema, Docker, tests | Approved, committed and pushed |
 | 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | Approved, committed and pushed |
 | 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
-| 4 | Risk engine and Mock Exchange | Not started |
+| 4 | Risk engine and Mock Exchange | **Implemented, pending owner approval.** Simulated fills blocked until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)) |
 | 5 | Agent orchestration | Not started |
 | 6 | (Backtesting and Buy-and-Hold, moved into Phase 3) | Delivered in Phase 3 |
 | 7 | LLM layer and trading journal | Not started |
@@ -44,7 +44,12 @@ Phase 3 adds the following:
 - **Fingerprints:** SHA-256 fingerprints for reproducibility.
 - **Runs:** user-owned, immutable backtest runs started through the API as background jobs.
 
-Backtests are advisory and never select or activate strategies; about 60 days of data is not statistically sufficient (see [docs/BACKTESTING.md](docs/BACKTESTING.md)). There is no risk engine, Mock Exchange, live paper trading, agent or LLM functionality yet.
+Backtests are advisory and never select or activate strategies; about 60 days of data is not statistically sufficient (see [docs/BACKTESTING.md](docs/BACKTESTING.md)).
+
+Phase 4 adds a deterministic risk engine and a Mock Exchange (orders, fills at the next bar's open, an Indian-equity component cost model, append-only cash ledger, long-only positions, risk-state refresh); execution is disabled by default; for the MVP, fills will be **simulation-only** on unverified Yahoo Finance data once approved ([docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md)). **Five-year intraday backtesting is not available at launch**: Yahoo provides about 60 days of 5-minute history and the archive grows only prospectively.
+
+The Phase 3 backtest and the Phase 4 Mock Exchange are separate: backtests simulate their own NEXT_BAR_OPEN_V1 fills
+and never place orders. There is no agent, live trading or LLM functionality yet.
 
 **Market data in brief** (details and evidence in [docs/MARKET_DATA.md](docs/MARKET_DATA.md)):
 
@@ -84,6 +89,10 @@ Interactive API docs: `http://localhost:8000/docs`. Full instructions, including
 - [docs/MARKET_DATA.md](docs/MARKET_DATA.md): Phase 2 market-data design, verified Yahoo behaviour, archive contents, limitations, operations
 - [docs/BACKTESTING.md](docs/BACKTESTING.md): Phase 3 indicators, strategies, selection, fill model, costs, stops/targets, benchmark, fingerprints, persistence (migration 0004) and limitations
 - [docs/API.md](docs/API.md): endpoints
+- [docs/PHASE4.md](docs/PHASE4.md): risk engine, Mock Exchange, decision D4, shared contracts, limitations
+- [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends
+- [docs/STAGING.md](docs/STAGING.md) and [docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md): validation procedures
 
 ## Architecture in brief
 

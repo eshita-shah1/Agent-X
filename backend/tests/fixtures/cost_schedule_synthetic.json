@@ -1,0 +1,27 @@
+{
+  "schedule_version": "SYNTHETIC-TEST-1",
+  "currency": "INR",
+  "description": "SYNTHETIC rates for automated tests only, chosen for hand calculation. NOT real NSE, SEBI, tax or broker charges.",
+  "rounding": [
+    {"charge_type": "BROKERAGE",  "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "STT",        "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "TXN_CHARGE", "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "SEBI_FEE",   "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "IPFT",       "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "STAMP_DUTY", "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "DP_CHARGE",  "stage": "FILL", "quantum": "0.000001", "mode": "UP"},
+    {"charge_type": "GST",        "stage": "FILL", "quantum": "0.000001", "mode": "UP"}
+  ],
+  "rates": [
+    {"rate_id": "T-BRK-D", "product": "DELIVERY", "charge_type": "BROKERAGE", "side": "BOTH", "basis": "TURNOVER_BPS_CAPPED_PER_ORDER", "value": "10", "cap": "20", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-STT-DB", "product": "DELIVERY", "charge_type": "STT", "side": "BUY", "basis": "TURNOVER_BPS", "value": "0", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-STT-DS", "product": "DELIVERY", "charge_type": "STT", "side": "SELL", "basis": "TURNOVER_BPS", "value": "25", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-TXN-D", "product": "DELIVERY", "charge_type": "TXN_CHARGE", "side": "BOTH", "basis": "TURNOVER_BPS", "value": "3", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-SEBI-D", "product": "DELIVERY", "charge_type": "SEBI_FEE", "side": "BOTH", "basis": "TURNOVER_BPS", "value": "0", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-IPFT-D", "product": "DELIVERY", "charge_type": "IPFT", "side": "BOTH", "basis": "TURNOVER_BPS", "value": "0", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-STAMP-D", "product": "DELIVERY", "charge_type": "STAMP_DUTY", "side": "BUY", "basis": "TURNOVER_BPS", "value": "3", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-DP-D", "product": "DELIVERY", "charge_type": "DP_CHARGE", "side": "SELL", "basis": "FLAT_PER_SCRIP_SELL_DAY", "value": "0", "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-GST-D", "product": "DELIVERY", "charge_type": "GST", "side": "BOTH", "basis": "PCT_OF_CHARGES", "value": "18", "applies_to": ["BROKERAGE", "TXN_CHARGE", "SEBI_FEE", "IPFT", "DP_CHARGE"], "effective_from": "2020-01-01", "source": "synthetic test fixture"},
+    {"rate_id": "T-SLIP-D", "product": "DELIVERY", "charge_type": "SLIPPAGE", "side": "BOTH", "basis": "PRICE_BPS", "value": "5", "effective_from": "2020-01-01", "source": "synthetic test fixture"}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "contract_note_id": "SYNTHETIC-CN-1",
+  "broker": "none (synthetic)",
+  "synthetic": true,
+  "source": "Constructed from tests/fixtures/cost_schedule_synthetic.json and verified by hand arithmetic. NOT a broker contract note; proves the harness, not broker compatibility.",
+  "trade_date": "2026-01-05",
+  "product": "DELIVERY",
+  "schedule": "../../fixtures/cost_schedule_synthetic.json",
+  "trades": [
+    {"order_ref": "B1", "instrument": "TESTCO", "side": "BUY", "quantity": 10, "price": "100.05"},
+    {"order_ref": "S1", "instrument": "TESTCO", "side": "SELL", "quantity": 4, "price": "109.945"},
+    {"order_ref": "S2", "instrument": "TESTCO", "side": "SELL", "quantity": 6, "price": "110"}
+  ],
+  "expected": {
+    "BROKERAGE": "2.10028", "STT": "2.74945", "TXN_CHARGE": "0.630084", "SEBI_FEE": "0", "IPFT": "0",
+    "STAMP_DUTY": "0.30015", "DP_CHARGE": "0", "GST": "0.491466", "total": "6.27143"
+  }
+}

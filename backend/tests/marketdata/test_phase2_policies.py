@@ -127,12 +127,21 @@ def test_no_application_code_assigns_a_verified_price_basis():
     assert PriceBasis.UNVERIFIED_PROVIDER_NATIVE.value == "UNVERIFIED_PROVIDER_NATIVE"
 
 
-def test_no_mock_exchange_order_or_execution_code_exists():
-    # Phase 3 (decision D19) permits app/indicators, app/strategies and app/backtest; every other ban stays.
-    forbidden_dirs = {"exchange", "mock_exchange", "orders", "execution", "risk", "agent"}
+def test_execution_code_exists_only_in_the_phase4_packages():
+    # Phase 3 (decision D19) permits app/indicators, app/strategies and app/backtest(_runs); Phase 4 added the risk
+    # engine and Mock Exchange (app/risk, app/exchange, app/orders). Packages of later phases must still not exist.
+    forbidden_dirs = {"mock_exchange", "execution", "agent"}
     assert not [p for p in APP.iterdir() if p.is_dir() and p.name in forbidden_dirs]
+    # Order and execution vocabulary belongs to the Phase 4 packages only: market data, indicators, strategies and the
+    # Phase 3 backtest (whose NEXT_BAR_OPEN_V1 fills are simulated on its own, never through the Mock Exchange) stay
+    # free of it.
+    execution_free = {"marketdata", "indicators", "strategies", "backtest", "backtest_runs"}
+    checked = 0
     for path, text in app_sources().items():
-        assert not re.search(r"\b(execution_price|fill_price|place_order|submit_order)\b", text), path.name
+        if execution_free & set(path.parts):
+            checked += 1
+            assert not re.search(r"\b(execution_price|fill_price|place_order|submit_order)\b", text), path.name
+    assert checked >= 40  # the scope really covers those packages
 
 
 # ---- D4: inferred closures (D) --------------------------------------------------------------------------------------
