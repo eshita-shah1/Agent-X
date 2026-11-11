@@ -16,6 +16,9 @@
     6. write the evidence to docs\evidence\<date>_staging_copy.json (no credentials).
   agentx is only read; agentx_test is never touched.
 #>
+param(
+    [switch]$Refresh  # reload the archive into an already-migrated, otherwise empty staging copy (e.g. after a session)
+)
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $backend = Join-Path $repo "backend"
@@ -53,7 +56,15 @@ function Src($sql) { Q $srcDb $srcUser $srcPass $sql }
 $attrs = S "select current_database()||'|'||current_user||'|'||rolsuper||'|'||rolcreatedb||'|'||rolcreaterole from pg_roles where rolname = current_user"
 if ($attrs -ne "agentx_staging|agentx_staging_app|false|false|false") { throw "Unexpected staging identity/attributes: $attrs" }
 $existing = S "select count(*) from information_schema.tables where table_schema='public'"
-if ([int]$existing -ne 0) { throw "agentx_staging is not empty ($existing tables). Tear it down and re-provision for a clean copy." }
+if ([int]$existing -ne 0 -and -not $Refresh) { throw "agentx_staging is not empty ($existing tables). Use -Refresh to reload the archive, or tear it down and re-provision." }
+if ($Refresh -and [int]$existing -ne 0) {
+    # Reload the archive only while staging holds no user or trading record (nothing the validator created is lost).
+    $userRows = S "select (select count(*) from users)+(select count(*) from virtual_accounts)+(select count(*) from orders)+(select count(*) from fills)+(select count(*) from positions)+(select count(*) from cash_ledger)+(select count(*) from risk_decisions)+(select count(*) from protective_exit_requirements)+(select count(*) from backtest_runs)+(select count(*) from audit_events)"
+    if ([int]$userRows -ne 0) { throw "Refusing -Refresh: staging already holds $userRows user/trading rows (validator records). Tear down and re-provision instead." }
+    # TRUNCATE does not fire the archive's row triggers; CASCADE reaches only tables verified empty above.
+    S ("TRUNCATE " + ($tables -join ", ") + " RESTART IDENTITY CASCADE") | Out-Null
+    Write-Host "Archive tables in agentx_staging truncated for refresh (no user or trading rows existed)."
+}
 $userJobs = Src "select count(*) from data_ingestion_jobs where requested_by_user_id is not null"
 if ([int]$userJobs -ne 0) { throw "$userJobs ingestion job(s) reference a development user; users are not copied. Refusing (no data is altered)." }
 
