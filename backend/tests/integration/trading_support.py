@@ -8,7 +8,8 @@ is verified, and no real provider data is relabelled anywhere.
 
 import itertools
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -42,10 +43,25 @@ from app.orders.service import OrderService, TradingContext
 
 D = Decimal
 NOW = datetime(2026, 1, 5, 5, 0, tzinfo=UTC)  # 10:30 IST, a Monday
+IST = ZoneInfo("Asia/Kolkata")
 FIXTURE_PROVIDER = "fixture"
 FIXTURE_EVIDENCE = "test-fixture: synthetic data, not a provider verification"
 
 _ids = itertools.count(1)
+
+
+# SYNTHETIC cost rates chosen for easy hand calculation. They are not real NSE/broker charges.
+FIXTURE_COSTS = dict(
+    exchange_brokerage_bps=D("10"),
+    exchange_brokerage_max_per_order=D("20"),
+    exchange_stt_buy_bps=D("0"),
+    exchange_stt_sell_bps=D("25"),
+    exchange_txn_charge_bps=D("3"),
+    exchange_sebi_fee_bps=D("0"),
+    exchange_stamp_duty_buy_bps=D("3"),
+    exchange_gst_pct=D("18"),
+    exchange_slippage_bps=D("5"),
+)
 
 
 class Clock:
@@ -59,13 +75,10 @@ class Clock:
 def enabled_settings(base: Settings, **over) -> Settings:
     """Settings with execution explicitly enabled against the fixture provider."""
     values = dict(
-        execution_price_source="candle_close",
+        execution_price_source="next_bar_open",
         execution_approved_price_bases=[PriceBasis.AS_TRADED_VERIFIED],
         execution_approved_providers=[FIXTURE_PROVIDER],
-        exchange_fee_fixed_per_order=D("20"),
-        exchange_fee_buy_bps=D("10"),
-        exchange_fee_sell_bps=D("30"),
-        exchange_slippage_bps=D("5"),
+        **FIXTURE_COSTS,
     )
     values.update(over)
     return base.model_copy(update=values)
@@ -126,9 +139,15 @@ def make_candle(
     volume: int = 100_000,
     observed_delay: timedelta = timedelta(seconds=30),
     version: int = 1,
+    open: str | None = None,
+    high: str | None = None,
+    low: str | None = None,
 ) -> Candle:
     """A synthetic, final (Phase 2 archives only final bars) candle. version > 1 is a non-canonical restatement."""
     c = D(close)
+    o = D(open) if open is not None else c
+    h = D(high) if high is not None else max(o, c)
+    lo = D(low) if low is not None else min(o, c)
     batch = _batch(db, provider, instrument)
     candle = Candle(
         instrument_id=instrument.id,
@@ -136,10 +155,10 @@ def make_candle(
         timeframe=Timeframe.M5,
         bar_start_ts=end - timedelta(minutes=5),
         bar_end_ts=end,
-        session_date=date(2026, 1, 5),
-        open=c,
-        high=c,
-        low=c,
+        session_date=(end - timedelta(minutes=5)).astimezone(IST).date(),
+        open=o,
+        high=h,
+        low=lo,
         close=c,
         volume=volume,
         is_final=True,
@@ -201,3 +220,29 @@ def submit(db: Session, settings: Settings, clock, account: VirtualAccount, orde
     result = OrderService(TradingContext.build(db, settings, clock)).submit(account.user_id, order_intent)
     db.commit()
     return result
+
+
+def next_bar(
+    db: Session, provider: DataProvider, instrument: Instrument, clock: Clock, open: str, close: str | None = None,
+    *, high: str | None = None, low: str | None = None, volume: int = 100_000, version: int = 1,
+) -> Candle:
+    """Archive the next 5-minute bar starting at or after `clock.now` (aligned to 5 minutes), finalized and
+    observed 30 s after its end, and move the clock 1 minute past its end."""
+    minute = (clock.now.minute // 5) * 5
+    start = clock.now.replace(minute=minute, second=0, microsecond=0)
+    if start < clock.now:
+        start += timedelta(minutes=5)
+    end = start + timedelta(minutes=5)
+    candle = make_candle(
+        db, provider, instrument, close or open, end=end, open=open, high=high, low=low, volume=volume,
+        version=version,
+    )
+    clock.now = end + timedelta(minutes=1)
+    return candle
+
+
+def process(db: Session, settings: Settings, clock, account: VirtualAccount):
+    ctx = TradingContext.build(db, settings, clock)
+    changed = ctx.exchange.process_open_orders(account)
+    db.commit()
+    return changed
