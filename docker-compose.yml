@@ -1,0 +1,32 @@
+# Runs the Agent-X API in a container against the NATIVE Windows PostgreSQL.
+# PostgreSQL is deliberately not a Compose service (see docs/SETUP.md).
+services:
+  api:
+    build: ./backend
+    image: agentx-backend:dev
+    env_file: .env # git-ignored; supplies credentials and JWT settings
+    environment:
+      # Overrides the .env value (localhost) so the container reaches the Windows host.
+      DB_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${API_PORT:-8000}:8000" # host port is configurable; 8000 is often taken by other local projects
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status == 200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot migration runner:  docker compose run --rm migrate
+  migrate:
+    image: agentx-backend:dev # built by the api service
+    env_file: .env
+    environment:
+      DB_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["alembic", "upgrade", "head"]
+    profiles: ["tools"]
