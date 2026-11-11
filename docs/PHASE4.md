@@ -1,8 +1,8 @@
 # Phase 4 — Risk Engine and Mock Exchange
 
-Status: the base implementation was merged in PR #1 (with Phase 2). This follow-up adds three things:
-the **next-bar-open execution model**, the **Indian-equity component cost model** and **risk-state refresh**.
-Simulated fills stay **blocked by default** until decision D4 is made (below).
+Status: merged in PR #1 and PR #2. The D4 decision (Yahoo Finance for the MVP, simulation-only execution) and the
+`simulation_provider_native` mode are documented in [D4_EXECUTION_READINESS.md](D4_EXECUTION_READINESS.md), which
+supersedes §0 and §2 below where they differ. Operations (scheduling, operators, corporate actions, dividends) are in [OPERATIONS.md](OPERATIONS.md). Fills stay **blocked by default**.
 
 ## 0. Review status
 
@@ -13,8 +13,7 @@ Simulated fills stay **blocked by default** until decision D4 is made (below).
 | Phase 4 base | Merged (PR #1). |
 
 Review findings and their resolution:
-1. **Same-bar fill risk: resolved.** The candle-close source is removed (`EXECUTION_PRICE_SOURCE=candle_close` is
-   now invalid configuration). Orders never fill at submission. They fill at the **open of the first finalized bar
+1. **Same-bar fill risk: resolved.** The candle-close source is removed (it is not a valid `EXECUTION_MODE`). Orders never fill at submission. They fill at the **open of the first finalized bar
    that starts at or after acceptance**, with documented slippage and gap handling (section 3.2). This is a
    simulation assumption, not evidence of a real fill.
 2. **Contract reconciliation with Phase 2: done** (section 5a).
@@ -63,7 +62,7 @@ dashboard metrics (Sharpe, profit factor, equity curve), round-trip trade record
 - Yahoo data has **not** been relabelled.
 
 ### Acceptance requirements (reference prices and fill bars)
-1. A source is explicitly enabled (`EXECUTION_PRICE_SOURCE=next_bar_open`).
+1. An execution mode is explicitly enabled (`EXECUTION_MODE`) and passes every configuration safeguard.
 2. The instrument matches.
 3. Timestamps are timezone-aware.
 4. Prices are positive.
@@ -81,7 +80,7 @@ If any fill bar fails a check, iteration stops at that bar. A later bar is never
    `price_basis = AS_TRADED_VERIFIED` with `basis_verified_by` evidence. If a quote/LTP source is preferred over
    bars, it needs a new `ExecutionPriceSource` implementation.
 2. Whether the next-bar-open model (section 3.2) is an acceptable simulation assumption.
-3. The nine cost rates (section 3.3), for the product (intraday or delivery) being simulated.
+3. The cost schedule (section 3.3): every rate, with its source and effective date, for DELIVERY.
 
 ## 3. Architecture
 
@@ -149,22 +148,13 @@ Strategy / agent / API  ──OrderIntent──▶  OrderService (app/orders)
 
 ### 3.3 Cost model (`exchange/costs.py`; shared with backtesting and the benchmark)
 
-```
-brokerage  = min(BROKERAGE_BPS × turnover, BROKERAGE_MAX_PER_ORDER − brokerage already charged on the order)
-stt        = turnover × STT_{BUY|SELL}_BPS
-txn_charge = turnover × TXN_CHARGE_BPS
-sebi_fee   = turnover × SEBI_FEE_BPS
-stamp_duty = turnover × STAMP_DUTY_BUY_BPS            (BUY only)
-gst        = (brokerage + txn_charge + sebi_fee) × GST_PCT / 100
-slippage   = adverse SLIPPAGE_BPS on the reference price of the fill
-```
-
-- No rate has a default, because rates depend on product, broker and date. While any rate is unset, orders are
-  rejected with `COSTS_NOT_CONFIGURED`, and `/exchange/status` lists the missing settings.
-- Each fill stores `fee_breakdown` and a snapshot of the cost model.
-- Rounding goes against the trader: prices are quantized to 6 dp (BUY up, SELL down), and each fee component is
-  rounded up to 6 dp.
-- `max_buy_quantity` returns a quantity whose worst-case total cost provably fits the cash. It is property-tested.
+Superseded by the effective-dated, product-aware component model in
+[D4_EXECUTION_READINESS.md](D4_EXECUTION_READINESS.md) §6:
+- rates come from an operator-maintained schedule (`EXCHANGE_COST_SCHEDULE_PATH`), with no rates in code;
+- charges: brokerage modes, STT, transaction charge, SEBI fee, IPFT, stamp duty, DP charges, GST with a
+  configurable base, and slippage;
+- per-charge rounding rules at fill, order or session level;
+- each fill records the schedule version, SHA-256 and rate ids it used.
 
 ### 3.4 Risk-state refresh (`RiskService.refresh`)
 - Re-values the account using eligible marks only.
@@ -281,7 +271,7 @@ class ExecutionPriceSource(Protocol):
     def latest(self, instrument_id: int) -> ExecutionQuote | None: ...
     def bars_from(self, instrument_id: int, start: datetime) -> list[ExecutionBar]: ...   # oldest first
 
-# CandleBarSource reads (read-only): candles(instrument_id, provider_id, timeframe, bar_start_ts, bar_end_ts,
+# CandleBarSource (EXECUTION_MODE = verified_next_bar_open | simulation_provider_native) reads (read-only): candles(instrument_id, provider_id, timeframe, bar_start_ts, bar_end_ts,
 #   session_date, open, high, low, close, volume, is_final, is_canonical, observed_at, price_basis, id),
 #   data_providers(id, code). Filter: one approved provider, EXECUTION_CANDLE_TIMEFRAME, is_final, is_canonical,
 #   bar_end_ts <= now, observed_at <= now.

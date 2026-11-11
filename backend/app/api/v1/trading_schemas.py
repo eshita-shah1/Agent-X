@@ -8,9 +8,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from app.db.enums import OrderSide, OrderSource, OrderStatus, OrderType, PriceBasis, RiskOutcome
+from app.db.enums import AdjustmentStatus, CorporateActionType, DividendCreditStatus, ExecutionPolicy, OrderSide, Product, OrderSource, OrderStatus, OrderType, PriceBasis, RiskOutcome
 
 Price = Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=6)]
 Pct = Annotated[Decimal, Field(gt=0, le=100, max_digits=7, decimal_places=4)]
@@ -31,6 +31,10 @@ class OrderCreateRequest(BaseModel):
     take_profit_price: Price | None = None
     strategy_id: str | None = Field(default=None, min_length=1, max_length=64)
     strategy_max_risk_pct: Pct | None = None
+    # When the decision was made; must be timezone-aware and not in the future. Defaults to the acceptance time.
+    signal_at: AwareDatetime | None = None
+    # Product whose cost rates apply; only DELIVERY is executed today.
+    product: Product = Product.DELIVERY
 
     @model_validator(mode="after")
     def _limit_price_matches_type(self) -> "OrderCreateRequest":
@@ -58,6 +62,8 @@ class FillResponse(BaseModel):
     price_source_ref: str
     provider_code: str
     price_basis: PriceBasis
+    execution_policy: ExecutionPolicy
+    realized_pnl: Decimal | None
     price_as_of: datetime
     price_observed_at: datetime
     cost_model: dict
@@ -110,6 +116,10 @@ class OrderResponse(BaseModel):
     reserved_cash: Decimal
     avg_fill_price: Decimal | None
     accepted_at: datetime
+    signal_at: datetime
+    decision_price_ref: str | None
+    execution_policy: ExecutionPolicy | None
+    product: Product
     risk_budget: Decimal | None
     created_at: datetime
     updated_at: datetime
@@ -225,7 +235,9 @@ class PortfolioResponse(BaseModel):
 
 
 class ExchangeStatusResponse(BaseModel):
-    execution_price_source: str
+    execution_mode: str
+    execution_policy: ExecutionPolicy | None
+    execution_approval_reference: str | None
     execution_model: str
     execution_enabled: bool
     approved_price_bases: list[PriceBasis]
@@ -234,6 +246,154 @@ class ExchangeStatusResponse(BaseModel):
     costs_configured: bool
     cost_model: dict | None
     blocking_reasons: list[str]
+    disclosures: list[str]
+
+
+# ---- corporate actions and daily P&L ----------------------------------------------------------------------
+
+
+class CorporateActionAdjustmentRequest(BaseModel):
+    """Operator request: apply one corporate action to every position it freezes."""
+
+    evidence_reference: str = Field(min_length=1, max_length=500)  # e.g. exchange circular / announcement id
+    # The operator re-enters the ratio (new : old); it must match the stored corporate-action record exactly.
+    confirm_ratio_numerator: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+    confirm_ratio_denominator: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+    cash_in_lieu_price: Price | None = None  # required only when the entitlement has a fractional share
+    cash_in_lieu_source: str | None = Field(default=None, min_length=1, max_length=500)  # where the price came from
+    cash_in_lieu_observed_at: AwareDatetime | None = None  # when it was published / observed
+
+
+class OperatorAdjustmentResult(BaseModel):
+    user_id: uuid.UUID
+    adjustment: "CorporateActionAdjustmentResponse"
+    replayed: bool
+
+
+class DividendCreditRequest(BaseModel):
+    """Operator request: credit one cash dividend to every entitled user (gross, no tax deducted)."""
+
+    evidence_reference: str = Field(min_length=1, max_length=500)  # e.g. company announcement / record-date notice
+    confirmed_amount_per_share: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+    payment_date: date
+    accept_provider_difference: bool = False
+
+
+class DividendCreditResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: uuid.UUID
+    instrument_id: int
+    corporate_action_id: int
+    ex_date: date
+    cum_date: date
+    payment_date: date
+    entitled_quantity: int
+    provider_amount_per_share: Decimal | None
+    confirmed_amount_per_share: Decimal
+    gross_amount: Decimal
+    evidence_reference: str
+    status: DividendCreditStatus
+    reason: str | None
+    credited_at: datetime
+
+
+class OperatorDividendResult(BaseModel):
+    credit: DividendCreditResponse
+    replayed: bool
+
+
+class PendingDividendResponse(BaseModel):
+    corporate_action_id: int
+    instrument_id: int
+    ex_date: date
+    provider_amount_per_share: Decimal | None
+    source: str
+    entitled_users: int
+    blocked_users: int  # holdings on an ambiguous basis (unadjusted split/bonus)
+
+
+class PendingOperatorAdjustmentResponse(BaseModel):
+    corporate_action_id: int
+    instrument_id: int
+    action_type: CorporateActionType
+    ex_date: date
+    ratio_numerator: Decimal | None
+    ratio_denominator: Decimal | None
+    source: str
+    adjustable: bool
+    affected_positions: int
+
+
+class CorporateActionAdjustmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    position_id: int
+    instrument_id: int
+    corporate_action_id: int
+    action_type: CorporateActionType
+    ratio_numerator: Decimal
+    ratio_denominator: Decimal
+    ex_date: date
+    source: str
+    evidence_reference: str
+    evidence: dict
+    status: AdjustmentStatus
+    reason: str | None
+    original_quantity: int
+    adjusted_quantity: int | None
+    original_avg_price: Decimal
+    adjusted_avg_price: Decimal | None
+    original_cost_basis: Decimal
+    adjusted_cost_basis: Decimal | None
+    fractional_quantity: Decimal
+    cash_in_lieu_price: Decimal | None
+    cash_in_lieu: Decimal | None
+    cash_in_lieu_source: str | None
+    cash_in_lieu_observed_at: datetime | None
+    realized_pnl: Decimal
+    original_stop_loss: Decimal | None
+    adjusted_stop_loss: Decimal | None
+    original_take_profit: Decimal | None
+    adjusted_take_profit: Decimal | None
+    cancelled_order_ids: list
+    requested_by: uuid.UUID
+    adjusted_at: datetime
+
+
+class AdjustmentSubmitResponse(BaseModel):
+    adjustment: CorporateActionAdjustmentResponse
+    replayed: bool
+
+
+class PendingAdjustmentResponse(BaseModel):
+    instrument_id: int
+    position_id: int
+    quantity: int
+    corporate_action_id: int
+    action_type: CorporateActionType
+    ex_date: date
+    ratio_numerator: Decimal | None
+    ratio_denominator: Decimal | None
+    source: str
+    adjustable: bool
+    last_attempt_status: AdjustmentStatus | None
+    last_attempt_reason: str | None
+
+
+class DailyPnlResponse(BaseModel):
+    session_date: date
+    realized_pnl: Decimal
+    fees: Decimal
+    net_realized_pnl: Decimal
+    fills: int
+    adjustments: int
+    unattributed_legacy_fills: int
+    dividend_income: Decimal
+    dividends: int
 
 
 ProcessResponse.model_rebuild()
+OperatorAdjustmentResult.model_rebuild()
