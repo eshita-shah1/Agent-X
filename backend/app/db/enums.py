@@ -38,3 +38,40 @@ class CorporateActionType(str, enum.Enum):
     BONUS = "BONUS"
     DIVIDEND = "DIVIDEND"
     OTHER = "OTHER"
+
+
+class TradingStatus(str, enum.Enum):
+    ENABLED = "ENABLED"
+    DISABLED = "DISABLED"
+
+
+class VerificationStatus(str, enum.Enum):
+    UNVERIFIED = "UNVERIFIED"
+    VERIFIED = "VERIFIED"
+    FAILED = "FAILED"
+
+
+class JobType(str, enum.Enum):
+    BACKFILL = "BACKFILL"
+    INCREMENTAL = "INCREMENTAL"
+
+
+class JobStatus(str, enum.Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"  # some instruments succeeded, some failed
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"  # the worker died or lost its heartbeat
+
+
+class BatchStatus(str, enum.Enum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    NO_DATA = "NO_DATA"
+    FAILED = "FAILED"
+
+
+class CalendarDayKind(str, enum.Enum):
+    HOLIDAY = "HOLIDAY"
+    SPECIAL_SESSION = "SPECIAL_SESSION"

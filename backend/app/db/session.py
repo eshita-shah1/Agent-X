@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 def make_engine(url: URL, connect_timeout_seconds: int) -> Engine:
     # pool_pre_ping drops dead connections (e.g. after a PostgreSQL restart) instead of failing a request.
-    return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": connect_timeout_seconds})
+    # The session timezone is pinned to UTC so every timestamptz is read back as a UTC instant, whatever the
+    # server's or machine's timezone is. (Exchange-local context is kept explicitly in session_date.)
+    return create_engine(
+        url, pool_pre_ping=True, connect_args={"connect_timeout": connect_timeout_seconds, "options": "-c timezone=UTC"}
+    )
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker[Session]:

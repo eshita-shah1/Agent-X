@@ -87,8 +87,14 @@ def test_a_user_can_have_only_one_account(client, db):
 
 # Every table must be classified on purpose. Adding a table in a later phase without adding it
 # here fails this test, which forces an explicit decision about who owns the data.
-GLOBAL_TABLES = {"data_providers", "instruments", "candles", "adjusted_candles", "corporate_actions"}
-SYSTEM_TABLES = {"users", "audit_events"}
+GLOBAL_TABLES = {
+    "data_providers", "instruments", "candles", "adjusted_candles", "corporate_actions",
+    # Phase 2 market-data tables (shared by all users)
+    "instrument_provider_symbols", "provider_capabilities", "provider_health_state", "data_ingestion_batches",
+    "data_quality_issues", "data_restatement_events", "exchange_calendar_days",
+}
+# data_ingestion_jobs has a nullable requested_by_user_id; the API only ever shows a user their own jobs.
+SYSTEM_TABLES = {"users", "audit_events", "data_ingestion_jobs"}
 USER_OWNED_TABLES = {"virtual_accounts"}
 
 

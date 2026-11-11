@@ -8,7 +8,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.db.enums import AdjustmentMethod, CorporateActionType, InstrumentType, PriceBasis, Timeframe
-from app.db.models import AdjustedCandle, AuditEvent, Candle, CorporateAction, DataProvider, Instrument
+from app.db.enums import BatchStatus, JobStatus, JobType
+from app.db.models import (
+    AdjustedCandle, AuditEvent, Candle, CorporateAction, DataIngestionBatch, DataIngestionJob, DataProvider, Instrument,
+)
 
 T0 = datetime(2026, 1, 5, 4, 0, tzinfo=UTC)  # 09:30 IST
 
@@ -19,11 +22,21 @@ def base(db):
     inst = Instrument(symbol="TESTCO", exchange="NSE", instrument_type=InstrumentType.EQUITY, timezone="Asia/Kolkata")
     db.add_all([provider, inst])
     db.commit()
-    return provider, inst
+    # Phase 2: every candle must reference the ingestion batch that produced it
+    job = DataIngestionJob(job_type=JobType.BACKFILL, status=JobStatus.SUCCEEDED, provider_id=provider.id, timeframe=Timeframe.M5)
+    db.add(job)
+    db.commit()
+    batch = DataIngestionBatch(
+        job_id=job.id, instrument_id=inst.id, provider_id=provider.id, timeframe=Timeframe.M5, provider_symbol="TESTCO.NS",
+        request_start=T0, request_end=T0 + timedelta(days=1), status=BatchStatus.SUCCEEDED,
+    )
+    db.add(batch)
+    db.commit()
+    return provider, inst, batch
 
 
 def make_candle(base, **over) -> Candle:
-    provider, inst = base
+    provider, inst, batch = base
     fields = dict(
         instrument_id=inst.id,
         provider_id=provider.id,
@@ -38,9 +51,15 @@ def make_candle(base, **over) -> Candle:
         volume=1000,
         is_final=True,
         observed_at=T0 + timedelta(minutes=20),
+        provider_symbol="TESTCO.NS",
+        ingestion_batch_id=batch.id,
     )
     fields.update(over)
     return Candle(**fields)
+
+
+def ca_extra(base):
+    return {"provider_id": base[0].id, "observed_at": T0}
 
 
 def insert(db, obj):
@@ -215,11 +234,11 @@ def test_candle_with_adjusted_rows_cannot_be_deleted(db, base):
 
 
 def test_split_requires_a_positive_ratio(db, base):
-    _, inst = base
+    _, inst, _ = base
     expect_rejected(
         db,
         lambda: db.add(
-            CorporateAction(instrument_id=inst.id, action_type=CorporateActionType.SPLIT, ex_date=date(2026, 1, 1), source="t")
+            CorporateAction(instrument_id=inst.id, action_type=CorporateActionType.SPLIT, ex_date=date(2026, 1, 1), source="t", **ca_extra(base))
         ),
     )
     insert(
@@ -230,17 +249,17 @@ def test_split_requires_a_positive_ratio(db, base):
             ex_date=date(2026, 1, 1),
             ratio_numerator=Decimal("1"),
             ratio_denominator=Decimal("2"),
-            source="t",
+            source="t", **ca_extra(base),
         ),
     )
 
 
 def test_dividend_requires_a_cash_amount(db, base):
-    _, inst = base
+    _, inst, _ = base
     expect_rejected(
         db,
         lambda: db.add(
-            CorporateAction(instrument_id=inst.id, action_type=CorporateActionType.DIVIDEND, ex_date=date(2026, 1, 1), source="t")
+            CorporateAction(instrument_id=inst.id, action_type=CorporateActionType.DIVIDEND, ex_date=date(2026, 1, 1), source="t", **ca_extra(base))
         ),
     )
     insert(
@@ -250,7 +269,7 @@ def test_dividend_requires_a_cash_amount(db, base):
             action_type=CorporateActionType.DIVIDEND,
             ex_date=date(2026, 1, 1),
             cash_amount=Decimal("5"),
-            source="t",
+            source="t", **ca_extra(base),
         ),
     )
 
@@ -259,7 +278,7 @@ def test_dividend_requires_a_cash_amount(db, base):
 
 
 def test_instrument_identity_is_unique_and_metadata_is_not_defaulted(db, base):
-    _, inst = base
+    _, inst, _ = base
     assert inst.tick_size is None and inst.lot_size is None  # never invented
     expect_rejected(
         db,
