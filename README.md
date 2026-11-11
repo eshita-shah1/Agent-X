@@ -26,8 +26,8 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | 1 | Backend foundation: FastAPI, PostgreSQL, Alembic, JWT auth, user isolation, base schema, Docker, tests | Approved, committed and pushed |
 | 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | Approved, committed and pushed |
 | 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
-| 4 | Risk engine and Mock Exchange | **Implemented, pending owner approval.** Simulated fills blocked until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)) |
-| 5 | Agent orchestration | Not started |
+| 4 | Risk engine and Mock Exchange | **Approved by the owner (2026-11-12).** Simulation-only staging approved; the staging run on real fresh data is pending the 2026-11-12 session. Simulated fills stay disabled outside staging until the real-environment items in [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md) §7.3 |
+| 5 | Agent orchestration | **Started (2026-11-12): scoping** |
 | 6 | (Backtesting and Buy-and-Hold, moved into Phase 3) | Delivered in Phase 3 |
 | 7 | LLM layer and trading journal | Not started |
 | 8 | Hardening and deployment | Not started |
