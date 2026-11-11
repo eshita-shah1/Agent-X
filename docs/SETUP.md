@@ -1,4 +1,4 @@
-# Agent-X Backend — Setup (Phases 1-2)
+# Agent-X Backend — Setup (Phases 1-3)
 
 Paper trading only. No real-money execution exists in this codebase.
 
@@ -31,6 +31,10 @@ Configuration is read from environment variables and a git-ignored `.env` in the
 | `MARKETDATA_FINALIZATION_MARGIN_SECONDS` | **Provisional** (default 60, retained by the owner for Phase 2). A bar is archived once `observed_at >= bar_end + margin`. Not a guarantee of Yahoo behaviour. |
 | `MARKETDATA_STALE_AFTER_MINUTES`, `MARKETDATA_PROVIDER_UNAVAILABLE_AFTER_FAILURES` | **Provisional** (defaults 15 and 3). Descriptive only: they label data and gate nothing. Trading-engine use needs a separate review. |
 | `MARKETDATA_INCREMENTAL_OVERLAP_HOURS`, `MARKETDATA_JOB_HEARTBEAT_TIMEOUT_SECONDS`, `MARKETDATA_REQUEST_PAUSE_SECONDS` | Operational (defaults 24, 300, 1.5). |
+| `BACKTEST_JOB_HEARTBEAT_TIMEOUT_SECONDS` | Operational (default 600). A `QUEUED`/`RUNNING` backtest whose heartbeat is older than this is marked `INTERRUPTED` when its owner next starts one. |
+
+Backtest models (fill model, sizing, cost defaults of zero, warm-up default of 2 sessions) are fixed in code and recorded
+in every run; they are not environment settings. See [BACKTESTING.md](BACKTESTING.md).
 
 ## Run on the host
 
@@ -53,6 +57,10 @@ cd backend
 ..\.venv\Scripts\python.exe -m pytest -q
 ```
 
+Test layout: `tests/indicators`, `tests/strategies` (including `selection/`) and `tests/backtest` are pure and fast
+(`pytest tests/backtest -q`); `tests/integration/test_backtest_*.py` cover migration 0004, the runner, the API, user
+isolation and reproducibility against the test database.
+
 Integration tests run against the real `agentx_test` PostgreSQL (the immutability triggers, check constraints and `timestamptz` behaviour cannot be exercised on SQLite); each starts from truncated tables. Pure unit tests (`tests/unit`, `tests/marketdata`) never touch the database. **The suite never touches the network or the real `yfinance`**: Yahoo is replaced by a deterministic fake provider. Do not run the opt-in probe or the ingestion CLI against `agentx_test`.
 
 ## Market data operations (Phase 2)
@@ -74,6 +82,21 @@ cd backend
 ```
 
 In Docker: `docker compose run --rm api python -m app.marketdata.cli <command>`. Probe reports are written to the git-ignored `data/probe_reports/`.
+
+## Backtests (Phase 3)
+
+Backtests run only when an authenticated user requests one (`POST /api/v1/backtests`). They read the archive and never
+contact a provider, so run a backfill first. One run per user may be active at a time. Endpoints:
+[API.md](API.md); behaviour and limitations: [BACKTESTING.md](BACKTESTING.md).
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m alembic upgrade head                      # includes 0004_backtest_runs_and_results
+```
+
+Back up a database that holds data before migrating it, for example
+`pg_dump -h 127.0.0.1 -U agentx_app -d agentx -Fc -f <backup-file>.dump` (supply the password through `PGPASSWORD`,
+never on the command line or in a committed file).
 
 ## Run with Docker Compose
 

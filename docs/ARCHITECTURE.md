@@ -1,8 +1,10 @@
-# Agent-X Backend — Architecture (Phases 1-2)
+# Agent-X Backend — Architecture (Phases 1-3)
 
 Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 is the foundation (auth,
-isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)). Strategies, regime
-detection, the Risk Engine, the Mock Exchange, the agent, backtesting and LLM features are **not implemented**.
+isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)); Phase 3 adds
+indicators, strategies, regime-based selection, the backtesting engine and the Buy-and-Hold benchmark (see
+[BACKTESTING.md](BACKTESTING.md)). The Risk Engine, the Mock Exchange, live paper trading, the agent and LLM features
+are **not implemented**.
 
 ## Layout
 
@@ -13,15 +15,22 @@ backend/
     core/              config (pydantic-settings), security (argon2id, JWT), logging
     db/
       base.py          declarative Base, naming convention, UserOwnedMixin
-      enums.py         InstrumentType, Timeframe, PriceBasis, AdjustmentMethod, CorporateActionType, job/batch enums
+      enums.py         InstrumentType, Timeframe, PriceBasis, AdjustmentMethod, CorporateActionType, job/batch/backtest enums
       session.py       engine (UTC session timezone) / sessionmaker / per-request session
       scoping.py       owned_select(): user-scoped queries
-      models/          user.py, market.py (instruments, candles, adjusted candles, corporate actions), ingestion.py
+      models/          user.py, market.py (instruments, candles, adjusted candles, corporate actions), ingestion.py,
+                       backtest.py (runs and results)
     marketdata/        providers/ (base interfaces, yahoo adapter, registry), pipeline, archive, adjustment, gaps,
                        freshness, calendar, jobs, service, seed, registry (approved universe), probe, cli
-    api/v1/            auth, account, market routers; deps (get_current_user, get_db); schemas
-  alembic/             migrations (0001_foundation, 0002_immutable_account_fields, 0003_market_data_foundation)
-  tests/               unit/, marketdata/ (pure, no DB), integration/ (real PostgreSQL); support.py (fake provider/clock)
+    indicators/        incremental float64 indicators (pure)
+    strategies/        five long-only strategies, configs, registry; selection/ (regime, candidates, session lock)
+    backtest/          pure backtesting engine: fills, costs, accounting, benchmark, fingerprints (no DB)
+    backtest_runs/     read-only data loader, background runs, atomic persistence
+    api/v1/            auth, account, market, backtests routers; deps (get_current_user, get_db); schemas
+  alembic/             migrations 0001_foundation, 0002_immutable_account_fields, 0003_market_data_foundation,
+                       0004_backtest_runs_and_results
+  tests/               unit/, marketdata/, indicators/, strategies/, backtest/ (pure, no DB),
+                       integration/ (real PostgreSQL); support.py (fake provider/clock)
 ```
 
 Later phases add packages beside these (`kernel/`, `risk/`, `exchange/`, ...). Empty placeholders were not created.
@@ -92,12 +101,45 @@ Summary of what changed in the foundation:
 - `create_app(settings, provider_registry, clock)` accepts a provider registry and clock as test hooks. Nothing
   market-related runs on application start-up.
 
+## Phase 3: strategies and backtesting
+
+Full design and limitations: [BACKTESTING.md](BACKTESTING.md).
+
+- **Dependency direction.** The packages depend only downward:
+  `indicators` <- `strategies` (+ `selection`) <- `backtest` (pure) <- `backtest_runs` (database) <- `api/v1/backtests`.
+  Boundary tests enforce three rules:
+  - indicators, strategies and selection never import the backtest;
+  - the engine imports no database, API, account, clock or randomness;
+  - neither the engine nor the runner contains order, exchange, provider, scheduler or LLM code.
+- **No feedback.** Selection takes no outcome metric as input, and nothing writes backtest results back into configuration or selection (D15).
+- **Migration `0004` (additive; `0001`-`0003` unchanged).** Six user-owned tables, each carrying a `user_id` FK to `users`:
+
+  | Table | Holds |
+  |---|---|
+  | `backtest_runs` | The run |
+  | `backtest_instrument_results` | Per-instrument results |
+  | `backtest_selection_decisions` | Explained selection decisions |
+  | `backtest_trades` | Trades |
+  | `backtest_events` | Events |
+  | `backtest_equity_points` | Per-bar equity |
+
+  Supporting objects:
+  - Result tables reference their run by `run_id`.
+  - A partial unique index allows one `QUEUED`/`RUNNING` run per user.
+  - Money columns are unconstrained `NUMERIC` (exact).
+  - Three trigger functions back 11 triggers, enforcing immutability. A run's request, configuration, labels, fingerprint and owner never change; its status only moves forward, a finished run is frozen, and runs are never deleted. Result rows are inserted only while their run is `RUNNING` and has the same owner, and are never updated or deleted. A check constraint ties the fingerprints to `SUCCEEDED`.
+  - Downgrading `0004` is refused while any run exists.
+- **Table classification.** The six tables are user-owned (`test_every_table_is_classified`). API queries go through `owned_select`, and another user's run is `404`.
+- **Accounts are read only.** A backtest reads the account's `initial_capital` as its default capital and never writes to the account.
+- **Time zones.** The engine normalises every bar timestamp to UTC and serialises explanations in UTC. Session logic stays in Asia/Kolkata. Results are therefore identical whatever zone the inputs, or the database session, used.
+
 ## What is deliberately not here
 
 - `risk_configuration` tables: no approved defaults and edit rules depend on agent state (Phase 4).
 - `futures_contract`: futures stay disabled until genuine contract-specific data exists. `InstrumentType.FUTURE` exists only so the instrument model need not change later.
 - Tick/lot sizes: none are invented. Phase 2 seeds the 10 equities and the provider, but `tick_size`/`lot_size` stay `null` until an authoritative instrument-specific source is approved.
-- A scheduler: ingestion is operator-initiated (approved for Phase 2).
+- A scheduler: ingestion is operator-initiated (approved for Phase 2), and backtests start only on an explicit request.
+- Mock Exchange, order management, live trading and broker integration. The backtest's NEXT_BAR_OPEN_V1 fill model is backtest-only and separate from the future Mock Exchange.
 - Virtual-account balances and margin: Phase 4. Phase 1 stores `initial_capital` (required at registration, no default) and currency `INR`.
 
 ## Security posture: local MVP versus hosted deployment

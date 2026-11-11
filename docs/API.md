@@ -1,4 +1,4 @@
-# Agent-X Backend — API (Phase 1)
+# Agent-X Backend — API (Phases 1-3)
 
 Base path `/api/v1`. Interactive docs at `/docs` (OpenAPI at `/openapi.json`).
 Authenticated endpoints need `Authorization: Bearer <access_token>`.
@@ -76,10 +76,83 @@ start-up.
 | GET | `/providers/health` | Provider status and its facts (last attempt/success/failure, error kind and message, consecutive failures, last observed market timestamp, last ingestion), per-instrument freshness (`status`, observed `data_age_seconds`, `lag_seconds`, `latest_finalized_bar_end`), and the thresholds, each labelled `PROVISIONAL` (configurable, descriptive only; they gate nothing). A provider never used is `UNKNOWN`; an instrument with no data is `UNAVAILABLE`, never healthy. |
 | GET | `/providers/capabilities` | Optional `provider`. Every capability with status `DOCUMENTED`, `VERIFIED`, `UNSUPPORTED` or `UNKNOWN`, plus the probe evidence. |
 
+## Backtests (Phase 3)
+
+Prefix `/api/v1/backtests`. **Every endpoint requires a bearer token.** Runs are owned by the user who started them:
+another user's run (or an instrument that is not part of the run) is `404`, never `403`. There is no update or delete
+endpoint (`PUT`/`PATCH`/`DELETE` are `405`), and stored results are immutable in the database. Backtests are
+advisory: no endpoint ranks configurations by results or activates a strategy. Design and limitations:
+[BACKTESTING.md](BACKTESTING.md).
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/strategies` | The strategy catalogue: id, version, family, rule description, approved initial defaults (times as `HH:MM`) and parameter names; `defaults_status`, the regime configuration (ADX 14, TREND ≥ 25, RANGE ≤ 20, checkpoint 09:30), the engine models and the disclosures. Static: contains no results. |
+| POST | `` (i.e. `/api/v1/backtests`) | Starts a run. `202` with the run (`QUEUED`); it runs in the background. |
+| GET | `` | The caller's runs, newest first. `limit` 1-100 (default 20), `offset`. `{items, count, limit, offset}`. |
+| GET | `/{run_id}` | One run: status, request snapshot (`request.submitted`, `request.config`), labels, fingerprints, disclosures, `summary`, `error_code`/`error_message`, timestamps. |
+| GET | `/{run_id}/instruments` | Per-instrument data quality, benchmark (with validity), summary and final values. |
+| GET | `/{run_id}/instruments/{instrument_id}/trades` | Ordered by `seq`. `limit` 1-500 (default 100), `offset`. |
+| GET | `/{run_id}/instruments/{instrument_id}/equity` | One point per evaluation bar, ordered by time. `limit` 1-5000 (default 1000), `offset`. |
+| GET | `/{run_id}/instruments/{instrument_id}/selections` | One explained selection decision per session. `limit` 1-500, `offset`. |
+| GET | `/{run_id}/instruments/{instrument_id}/events` | Signals, expiries, skips, deferrals, missing bars. `limit` 1-500, `offset`. |
+
+Paginated responses are `{items, count, limit, offset}` (`count` is the total). In result rows, decimals are exact
+strings (stored without rounding) and timestamps are UTC ISO-8601 with `Z`; selection explanations also use UTC
+(the 09:30 IST checkpoint is `...T04:00:00Z`).
+
+### `POST /api/v1/backtests` body
+
+```json
+{
+  "instrument_ids": [1, 2],
+  "start": "2026-10-01",
+  "end": "2026-11-10",
+  "mode": "REGIME_PRIORITY",
+  "candidates": [
+    {"config_id": "orb-default", "strategy_id": "ORB", "priority": 1},
+    {"config_id": "rsi-25", "strategy_id": "RSI_BOLLINGER", "priority": 2, "params": {"rsi_period": 25}}
+  ],
+  "capital": "250000.00",
+  "cost_model": {"fee_per_order": "20", "fee_bps_per_side": "0", "sell_side_bps": "0", "slippage_bps": "5"},
+  "warmup_sessions": 2
+}
+```
+
+| Field | Rules |
+|---|---|
+| `instrument_ids` | 1-20 unique ids of **enabled equities** (futures are refused). |
+| `start`, `end` | Session dates, inclusive. `end` not after today (IST); at most 366 days. |
+| `mode` | `REGIME_PRIORITY` (every candidate needs a unique `priority` ≥ 1) or `PINNED` (exactly one candidate, no priority). |
+| `candidates` | 1-10. `params` override the approved defaults; unknown or mistyped parameters are refused (times as `"HH:MM"`). There is no implicit candidate list or default priority order. |
+| `capital` | Optional, > 0, at most 2 decimal places. Default: the caller's virtual-account `initial_capital` (read only). Each instrument receives the full amount. |
+| `cost_model` | Optional; every field defaults to `0` (the run is then `GROSS_OF_COSTS`). Send decimals as strings. `slippage_bps` < 10000. |
+| `warmup_sessions` | 0-20, default 2. |
+
+Unknown fields are rejected (`422`).
+
+### Run states and errors
+
+`status`: `QUEUED` → `RUNNING` → `SUCCEEDED` | `FAILED` | `INTERRUPTED`. Fingerprints exist only for `SUCCEEDED`.
+A `FAILED`/`INTERRUPTED` run has no results; its `error_code` is a refusal code below, `CONFIG_FINGERPRINT_MISMATCH`,
+`INTERNAL_ERROR` or `INTERRUPTED`.
+
+| Status | `detail.code` | When |
+|---|---|---|
+| 422 | `INVALID_CONFIGURATION` | Unknown/disabled/non-equity instrument, unknown strategy or parameter, invalid configuration, mode or priorities |
+| 422 | `INVALID_PERIOD` | `end` before `start`, `end` in the future, period too long |
+| 422 | `INVALID_DATA` | Archived bars off the calendar grid, out of order, or with an unexpected price basis |
+| 422 | `NO_DATA` | No archived bars in the period |
+| 422 | `INSUFFICIENT_DATA` | All sessions with data are needed for warm-up |
+| 422 | `CORPORATE_ACTION_IN_PERIOD` | Split or bonus ex-date inside the evaluation period |
+| 409 | `BACKTEST_ALREADY_RUNNING` | The caller already has a `QUEUED`/`RUNNING` run (`active_run_id` given). Other users are unaffected. |
+
+Refusals are `{"detail": {"code", "message", "instrument_id"}}`; request-shape errors use FastAPI's standard `422`
+validation format. Nothing is queued when a request is refused.
+
 ## Errors
-Errors use FastAPI's default `{"detail": ...}` shape; some market-data errors carry a structured detail
-`{"code": ..., "message": ...}` (`INSTRUMENT_DISABLED`, `INGESTION_ALREADY_RUNNING`, `NO_INGESTABLE_INSTRUMENTS`,
-`PROVIDER_NOT_CONFIGURED`). `401` responses carry `WWW-Authenticate: Bearer`.
+Errors use FastAPI's default `{"detail": ...}` shape; some errors carry a structured detail `{"code": ..., "message":
+...}`: market data (`INSTRUMENT_DISABLED`, `INGESTION_ALREADY_RUNNING`, `NO_INGESTABLE_INSTRUMENTS`,
+`PROVIDER_NOT_CONFIGURED`) and backtests (see above). `401` responses carry `WWW-Authenticate: Bearer`.
 
 ## Not yet available
-Strategies, agent, risk, exchange, portfolio, backtests, benchmarks, journal and reports arrive in later phases.
+Risk engine, Mock Exchange, live paper trading, portfolio, agent, journal and LLM explanations arrive in later phases.

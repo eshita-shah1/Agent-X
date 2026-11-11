@@ -24,17 +24,27 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 |---|---|---|
 | 0 | Requirement validation and data research | Done (decisions recorded with the project owner) |
 | 1 | Backend foundation: FastAPI, PostgreSQL, Alembic, JWT auth, user isolation, base schema, Docker, tests | Approved, committed and pushed |
-| 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | **Implemented; the eight Phase 2 decisions are applied. Awaiting owner acceptance (not committed or pushed)** |
-| 3 | Indicators, regimes, strategies, selector | Not started |
+| 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | Approved, committed and pushed |
+| 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
 | 4 | Risk engine and Mock Exchange | Not started |
 | 5 | Agent orchestration | Not started |
-| 6 | Backtesting and Buy-and-Hold benchmark | Not started |
+| 6 | (Backtesting and Buy-and-Hold, moved into Phase 3) | Delivered in Phase 3 |
 | 7 | LLM layer and trading journal | Not started |
 | 8 | Hardening and deployment | Not started |
 
 Each phase is reviewed and approved by the project owner before it is committed, tagged (`phase-N-...`) and followed by the next. Futures support stays disabled until genuine contract-specific data exists; equities come first.
 
-**What exists today:** user registration and JWT login, a per-user virtual account with an immutable initial-capital baseline, health endpoints, and a market-data foundation: 10 NSE equities registered (NIFTY/BANKNIFTY futures are disabled placeholders), a Yahoo Finance adapter, a validated PostgreSQL archive of 5-minute candles with provenance, restatement tracking, raw/adjusted separation, coverage and freshness reporting, ingestion jobs and authenticated market-data APIs. The first 60-day backfill was collected and its actual coverage is documented in [docs/MARKET_DATA.md](docs/MARKET_DATA.md). There is no strategy, risk, exchange, agent, backtesting or LLM functionality yet.
+**What exists today:** user registration and JWT login, a per-user virtual account with an immutable initial-capital baseline, health endpoints, and a market-data foundation: 10 NSE equities registered (NIFTY/BANKNIFTY futures are disabled placeholders), a Yahoo Finance adapter, a validated PostgreSQL archive of 5-minute candles with provenance, restatement tracking, raw/adjusted separation, coverage and freshness reporting, ingestion jobs and authenticated market-data APIs. The first 60-day backfill was collected and its actual coverage is documented in [docs/MARKET_DATA.md](docs/MARKET_DATA.md).
+
+Phase 3 adds the following:
+- **Strategy layer:** deterministic indicators, and five long-only intraday strategies (ORB, VWAP cross, EMA crossover, RSI/Bollinger mean reversion, Supertrend) with approved initial defaults.
+- **Selection:** regime classification (ADX at 09:30 IST), and per-instrument strategy selection locked for each session.
+- **Backtesting engine:** next-bar-open fills, stop-first protective exits, mandatory 15:15 square-off, configurable costs (default zero, `GROSS_OF_COSTS`) and Decimal accounting.
+- **Benchmark:** an independent Buy-and-Hold comparison.
+- **Fingerprints:** SHA-256 fingerprints for reproducibility.
+- **Runs:** user-owned, immutable backtest runs started through the API as background jobs.
+
+Backtests are advisory and never select or activate strategies; about 60 days of data is not statistically sufficient (see [docs/BACKTESTING.md](docs/BACKTESTING.md)). There is no risk engine, Mock Exchange, live paper trading, agent or LLM functionality yet.
 
 **Market data in brief** (details and evidence in [docs/MARKET_DATA.md](docs/MARKET_DATA.md)):
 
@@ -72,13 +82,35 @@ Interactive API docs: `http://localhost:8000/docs`. Full instructions, including
 - [docs/SETUP.md](docs/SETUP.md): environment, configuration, running, testing, migrations
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): structure, authentication, isolation, raw/adjusted price separation
 - [docs/MARKET_DATA.md](docs/MARKET_DATA.md): Phase 2 market-data design, verified Yahoo behaviour, archive contents, limitations, operations
+- [docs/BACKTESTING.md](docs/BACKTESTING.md): Phase 3 indicators, strategies, selection, fill model, costs, stops/targets, benchmark, fingerprints, persistence (migration 0004) and limitations
 - [docs/API.md](docs/API.md): endpoints
+
+## Architecture in brief
+
+Modular monolith (FastAPI, SQLAlchemy, PostgreSQL). Dependencies point one way:
+
+```
+marketdata (archive) ──read──> backtest_runs (database runner) ──> backtest (pure engine)
+                                                                    └─> strategies + selection ──> indicators
+api/v1 (auth, account, market, backtests) ──> services above
+```
+
+The pure layers (indicators, strategies, selection, backtest engine) have no database, network, clock or LLM
+dependencies, and tests enforce these boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Roadmap
+
+1. **Phase 3:** strategy and backtesting layer, implemented and approved.
+2. **Phase 4:** risk engine and Mock Exchange. This includes the execution-price policy for archived Yahoo prices, which is deferred from Phase 2.
+3. **Phase 5:** agent orchestration.
+4. **Phase 7:** LLM explanations and trading journal. The LLM explains decisions only and never decides them.
+5. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
 
 ## Repository layout
 
 ```
 backend/    FastAPI application, Alembic migrations, tests
-docs/       setup, architecture and API documentation
+docs/       setup, architecture, market-data, backtesting and API documentation
 docker-compose.yml, .env.example, .gitignore, .gitattributes
 ```
 
