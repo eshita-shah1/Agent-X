@@ -75,3 +75,45 @@ class BatchStatus(str, enum.Enum):
 class CalendarDayKind(str, enum.Enum):
     HOLIDAY = "HOLIDAY"
     SPECIAL_SESSION = "SPECIAL_SESSION"
+
+# ---- Phase 4: risk engine and Mock Exchange -------------------------------------------------
+
+
+class OrderSide(str, enum.Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderType(str, enum.Enum):
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+
+
+class OrderStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+
+OPEN_ORDER_STATUSES = (OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED)
+TERMINAL_ORDER_STATUSES = (OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELLED)
+
+
+class OrderSource(str, enum.Enum):
+    MANUAL = "MANUAL"  # submitted by the user through the API
+    AGENT = "AGENT"  # submitted by the autonomous agent (Phase 5)
+    RISK_EXIT = "RISK_EXIT"  # protective stop-loss / take-profit exit
+
+
+class RiskOutcome(str, enum.Enum):
+    APPROVED = "APPROVED"
+    RESIZED = "RESIZED"
+    REJECTED = "REJECTED"
+
+
+class LedgerEntryType(str, enum.Enum):
+    BUY_SETTLEMENT = "BUY_SETTLEMENT"
+    SELL_PROCEEDS = "SELL_PROCEEDS"
+    FEE = "FEE"

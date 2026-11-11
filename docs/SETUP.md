@@ -32,6 +32,19 @@ Configuration is read from environment variables and a git-ignored `.env` in the
 | `MARKETDATA_STALE_AFTER_MINUTES`, `MARKETDATA_PROVIDER_UNAVAILABLE_AFTER_FAILURES` | **Provisional** (defaults 15 and 3). Descriptive only: they label data and gate nothing. Trading-engine use needs a separate review. |
 | `MARKETDATA_INCREMENTAL_OVERLAP_HOURS`, `MARKETDATA_JOB_HEARTBEAT_TIMEOUT_SECONDS`, `MARKETDATA_REQUEST_PAUSE_SECONDS` | Operational (defaults 24, 300, 1.5). |
 
+| `EXECUTION_PRICE_SOURCE` | Phase 4. `disabled` (default) or `candle_close`. While disabled, **no order can fill** (decision D4). |
+| `EXECUTION_APPROVED_PRICE_BASES` | Phase 4. JSON list, default `[]`. `UNVERIFIED_PROVIDER_NATIVE` is refused at startup. |
+| `EXECUTION_APPROVED_PROVIDERS` | Phase 4. JSON list of provider codes, default `[]`; `candle_close` requires exactly one. |
+| `EXECUTION_CANDLE_TIMEFRAME` | Phase 4. Default `5m` (the canonical timeframe). |
+| `EXECUTION_MAX_PRICE_AGE_SECONDS` | Phase 4. Default `900`, the **provisional** 15-minute stale threshold. |
+| `EXCHANGE_FEE_FIXED_PER_ORDER`, `EXCHANGE_FEE_BUY_BPS`, `EXCHANGE_FEE_SELL_BPS`, `EXCHANGE_SLIPPAGE_BPS` | Phase 4. **No defaults.** While any is unset, orders are rejected with `COSTS_NOT_CONFIGURED`. |
+| `EXCHANGE_MAX_VOLUME_PARTICIPATION` | Phase 4. Optional, in (0, 1]. Enables partial fills (max share of an observation's volume per fill). |
+
+Phase 4 needs no new dependencies and no PostgreSQL extensions.
+
+### macOS note (Phase 4 development machine)
+Phase 4 was developed and tested on macOS with Homebrew `python@3.14` (3.14.10) and `postgresql@18` (18.x). The cluster ran on port 5433 because another PostgreSQL already used 5432, so `DB_PORT=5433` in that machine's `.env`. Use `.venv/bin/python` instead of `.\.venv\Scripts\python.exe`.
+
 ## Run on the host
 
 ```powershell

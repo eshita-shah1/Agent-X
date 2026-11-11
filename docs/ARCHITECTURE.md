@@ -26,6 +26,20 @@ backend/
 
 Later phases add packages beside these (`kernel/`, `risk/`, `exchange/`, ...). Empty placeholders were not created.
 
+Phase 4 added (details in [PHASE4.md](PHASE4.md)):
+
+```
+  app/
+    core/clock.py      injectable UTC clock
+    db/models/trading.py   risk_settings, risk_state, orders, fills, cash_ledger, positions, risk_decisions
+    exchange/          pricing (execution-price contract + gate, D4), costs, accounting (pure),
+                       portfolio (valuation), service (MockExchange), types (OrderIntent)
+    risk/              engine (pure risk evaluation), service (settings, state, snapshot, kill switch)
+    orders/            service (OrderService: intent -> risk -> exchange, one transaction)
+    api/v1/trading.py  orders, portfolio, risk and exchange-status endpoints
+  alembic/versions/0004_risk_engine_and_mock_exchange.py
+```
+
 ## Authentication
 
 - Passwords: argon2id (`argon2-cffi` defaults), hashes upgraded on login if parameters change. Minimum length 12 (a security floor, not a trading parameter).
@@ -54,13 +68,15 @@ system is added in Phase 2.
 - Unique keys on `(instrument, provider, timeframe, bar_start_ts, observation_version)`, plus a partial unique index allowing one canonical version per bar, prevent duplicate candles and keep different providers' bars as separate rows (no silent provider switching). The first observation stays canonical; restated observations are additional non-canonical versions (approved Phase 2 policy).
 - Timestamps are `timestamptz` (UTC instants); `session_date` records the exchange-local trading date. `observed_at` records when Agent-X received a bar, which later phases need for the no-lookahead eligibility rules.
 
-Execution code (Phase 4) must read only `candles`, and only rows whose `price_basis` the owner has approved for execution. The execution-price source is **deferred to Phase 4**; until then every candle is `UNVERIFIED_PROVIDER_NATIVE`, nothing relabels it, and no execution or fill code exists.
+Execution code (Phase 4) must read only `candles`, and only rows whose `price_basis` the owner has approved for execution. The execution-price source is **deferred to Phase 4**, and Phase 4 leaves it unapproved (decision D4): every candle is still `UNVERIFIED_PROVIDER_NATIVE` and nothing relabels it.
+
+Phase 4 enforces this through `ExecutionPriceGate`. The default configuration approves no source, basis or provider, so nothing can fill. A check constraint on `fills` also forbids storing an `UNVERIFIED_PROVIDER_NATIVE` execution price.
 
 ## Account baseline and immutability
 
 - `virtual_accounts.initial_capital` (`NUMERIC(18,2) NOT NULL`, no default, `> 0`) is the original account baseline, supplied at registration and used for historical performance calculations.
 - A trigger (migration `0002`) rejects any `UPDATE` of `initial_capital`, `currency`, `user_id`, `id` or `created_at`. The baseline therefore cannot drift, whatever code runs.
-- Cash, available balance, margin and equity are **not** modelled yet (Phase 4). They are intended to be derived from an append-only ledger, separate from this baseline.
+- Cash is derived as `initial_capital + SUM(cash_ledger.amount)` from the append-only ledger (Phase 4). Available cash subtracts reservations held by open BUY orders. Equity adds positions marked with gate-eligible prices only. Margin is not modelled: the account is a long-only cash account.
 - A future account reset must be a separate, explicitly authorised and audited operation. It is not an `UPDATE` of these columns and is not implemented.
 - Registration creates the user, the virtual account and the audit event in a single transaction; failure injection tests confirm nothing is left behind.
 
@@ -94,11 +110,11 @@ Summary of what changed in the foundation:
 
 ## What is deliberately not here
 
-- `risk_configuration` tables: no approved defaults and edit rules depend on agent state (Phase 4).
+- Risk configuration now exists as `risk_settings` (Phase 4) with **no defaults**: entries are rejected until the user saves every limit. Edit rules that depend on agent state (for example, locking settings while the agent runs) remain for Phase 5.
 - `futures_contract`: futures stay disabled until genuine contract-specific data exists. `InstrumentType.FUTURE` exists only so the instrument model need not change later.
 - Tick/lot sizes: none are invented. Phase 2 seeds the 10 equities and the provider, but `tick_size`/`lot_size` stay `null` until an authoritative instrument-specific source is approved.
 - A scheduler: ingestion is operator-initiated (approved for Phase 2).
-- Virtual-account balances and margin: Phase 4. Phase 1 stores `initial_capital` (required at registration, no default) and currency `INR`.
+- Margin and short selling: not modelled (long-only cash account). Phase 1 stores `initial_capital` (required at registration, no default) and currency `INR`.
 
 ## Security posture: local MVP versus hosted deployment
 
