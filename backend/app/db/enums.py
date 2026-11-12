@@ -219,3 +219,57 @@ class AgentDecisionOutcome(str, enum.Enum):
     SUPPRESSED_INVALID_LEVELS = "SUPPRESSED_INVALID_LEVELS"
     SUPPRESSED_NO_QUANTITY = "SUPPRESSED_NO_QUANTITY"
     SUPPRESSED_NOT_HELD = "SUPPRESSED_NOT_HELD"  # an exit signal with no agent position to exit
+
+
+# ---- Phase 6: explanations and the trading journal (migration 0013) ------------------------------------------------
+
+
+class JournalEntryType(str, enum.Enum):
+    MANUAL = "MANUAL"  # written by the user; fully editable and deletable
+    AUTO = "AUTO"  # created from an authoritative trading record; its system facts are immutable, notes editable
+
+
+class JournalSourceEvent(str, enum.Enum):
+    """What an AUTO entry records. Each is derived from existing authoritative rows (no new event pipeline)."""
+
+    TRADE_CLOSED = "TRADE_CLOSED"  # a position episode went from flat to open to flat (fills)
+    ENTRY_SIGNAL = "ENTRY_SIGNAL"  # an agent decision on an ENTER_LONG strategy signal
+    EXIT_SIGNAL = "EXIT_SIGNAL"  # an agent decision on an EXIT_LONG strategy signal
+    RISK_REJECTION = "RISK_REJECTION"  # an order rejected by the Phase 4 risk engine
+    ORDER_REJECTED = "ORDER_REJECTED"  # an order rejected for another reason (e.g. the exchange)
+    ORDER_CANCELLED = "ORDER_CANCELLED"
+    PARTIAL_FILL = "PARTIAL_FILL"  # a fill that left its order incomplete
+    PROTECTIVE_EXIT = "PROTECTIVE_EXIT"  # a Phase 4 stop-loss / take-profit exit order
+    AGENT_INTERVENTION = "AGENT_INTERVENTION"  # an agent event that needs attention (block, pause, error)
+    MANUAL_TRADE = "MANUAL_TRADE"  # a manual order that was (partly) filled
+    SESSION_SUMMARY = "SESSION_SUMMARY"  # one entry per finished session with activity
+
+
+class TradeOutcome(str, enum.Enum):
+    """A classification label (never an amount). Amounts are always read from the authoritative records."""
+
+    WIN = "WIN"
+    LOSS = "LOSS"
+    BREAKEVEN = "BREAKEVEN"
+    OPEN = "OPEN"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"  # e.g. fills booked before migration 0007 carry no realized P&L
+    NONE = "NONE"  # not a trade
+
+
+class ExplanationSubject(str, enum.Enum):
+    AGENT_DECISION = "AGENT_DECISION"
+    ORDER = "ORDER"
+    AGENT_EVENT = "AGENT_EVENT"
+    DAILY_SUMMARY = "DAILY_SUMMARY"
+    JOURNAL_INSIGHTS = "JOURNAL_INSIGHTS"
+
+
+class NarrativeStatus(str, enum.Enum):
+    NOT_REQUESTED = "NOT_REQUESTED"  # only the deterministic explanation was asked for
+    DISABLED = "DISABLED"  # no LLM provider is configured (or it is misconfigured): rule-based only
+    GENERATED = "GENERATED"  # a validated LLM narrative is stored
+    FAILED = "FAILED"  # provider error or timeout: rule-based only
+    INVALID_OUTPUT = "INVALID_OUTPUT"  # the provider answered but the answer failed validation: rule-based only
+    RATE_LIMITED = "RATE_LIMITED"  # the per-user hourly LLM budget is used up: rule-based only
