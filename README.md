@@ -28,7 +28,7 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
 | 4 | Risk engine and Mock Exchange | **Approved by the owner (2026-11-12).** Simulation-only staging approved; the staging run on real fresh data is pending the 2026-11-12 session. Simulated fills stay disabled outside staging until the real-environment items in [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md) §7.3 |
 | 5 | Agent orchestration | **Implemented, merged to `main` and tagged `phase-5-agent-orchestration`**. Runs SIGNALS_ONLY while execution is disabled; end-to-end paper execution awaits decision D15 ([docs/PHASE5.md](docs/PHASE5.md)) |
-| 6 | LLM explanations and trading journal | **Implemented and tested, pending owner review** (working tree on `main`, uncommitted; development database not yet migrated to `0013`) ([docs/PHASE6.md](docs/PHASE6.md)). Backtesting and Buy-and-Hold, the original Phase 6, were delivered in Phase 3 |
+| 6 | LLM explanations and trading journal | **Implemented, tested and approved by the owner** (branch `phase-6-journal-explanations`, not yet pushed or merged; development database not yet migrated to `0013`) ([docs/PHASE6.md](docs/PHASE6.md)). Backtesting and Buy-and-Hold, the original Phase 6, were delivered in Phase 3 |
 | 7 | (LLM layer and trading journal, moved into Phase 6) | Delivered in Phase 6 |
 | 8 | Hardening and deployment | Not started |
 
@@ -140,7 +140,7 @@ the Phase 6 packages, which write only journal and explanation tables. Tests enf
 2. **Phase 4:** risk engine and Mock Exchange, implemented. Fills stay simulation-only until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)).
 3. **Decided:** the backtest and the Mock Exchange keep separate simulation models (intraday research vs delivery paper execution; [docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
 4. **Phase 5:** agent orchestration, merged and tagged ([docs/PHASE5.md](docs/PHASE5.md)). Execution approval (D15) and the Phase 4 staging run (B9) are separate, outstanding milestones.
-5. **Phase 6:** LLM explanations and trading journal, implemented and pending review ([docs/PHASE6.md](docs/PHASE6.md)). The LLM explains decisions only and never decides them. (This was Phase 7; Phase 6 was absorbed into Phase 3.)
+5. **Phase 6:** LLM explanations and trading journal, implemented and approved ([docs/PHASE6.md](docs/PHASE6.md)). The LLM explains decisions only and never decides them. (This was Phase 7; Phase 6 was absorbed into Phase 3.)
 6. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
 
 ## Repository layout

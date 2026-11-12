@@ -1,6 +1,6 @@
 # Phase 6 — LLM Explanations and Trading Journal
 
-Status: implemented and tested in the working tree on `main` (not committed). **Paper trading only.** Phase 6 adds
+Status: implemented and tested; committed on branch `phase-6-journal-explanations` (not pushed, not merged, not tagged). **Paper trading only.** Phase 6 adds
 understanding and review of trading activity. It adds no trading capability: an LLM explains, it never decides, sizes,
 submits, changes or cancels anything, and the deterministic pipeline (strategies, selection, risk, Mock Exchange,
 accounting, agent lifecycle) is unchanged and does not import any Phase 6 code.
