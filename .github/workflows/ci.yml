@@ -155,6 +155,8 @@ jobs:
           test "$(docker run --rm --entrypoint id agentx-backend:ci -u)" = "10001"
           ! docker run --rm --entrypoint sh agentx-backend:ci -c 'ls -a /app' | grep -q '^\.env'
       - name: Compose files are valid
+        # Validated as it is used: with an env file (placeholders here; real values never live in the repo).
         run: |
-          touch .env.production
-          docker compose -f docker-compose.prod.yml config -q
+          printf 'DB_NAME=agentx_ci\nDB_USER=agentx_ci\nDB_PASSWORD=placeholder-not-a-secret\n' > .env.production
+          docker compose -f docker-compose.prod.yml --env-file .env.production config -q
+          docker compose -f docker-compose.prod.yml --env-file .env.production --profile tools --profile bundled-db config -q
