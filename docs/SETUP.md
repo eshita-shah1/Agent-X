@@ -154,3 +154,9 @@ See [OPERATIONS.md](OPERATIONS.md). Summary:
 - **Operators:** `python -m app.ops.cli set-operator --email ... --on|--off` (server-side only).
 - **Contract-note check (B2):** `python -m app.ops.cli check-contract-note note.json`.
 - **Staging (B9):** [STAGING.md](STAGING.md). **Windows (B8):** [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md).
+
+## Explanations and journal (Phase 6)
+
+No configuration is needed: `LLM_PROVIDER=disabled` (the default) gives rule-based explanations. To add an optional LLM
+narrative, see `.env.example` (`LLM_*`) and [PHASE6.md](PHASE6.md) §9: a local OpenAI-compatible server (e.g. Ollama;
+free, no key) or Claude (`pip install anthropic` and an `LLM_API_KEY`). Migration `0013` adds the journal tables.
