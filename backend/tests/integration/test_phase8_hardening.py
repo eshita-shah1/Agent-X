@@ -259,13 +259,15 @@ def test_restore_into_the_disposable_database_matches_the_backup(test_settings, 
     assert report.tables_compared == len(m["snapshot"]) and report.alembic_version == m["alembic_version"]
 
 
-@pytest.mark.parametrize("confirm, refused", [(None, True), ("agentx", True), ("agentx_test", False)])
-def test_staging_and_production_migrations_need_an_explicit_target(confirm, refused):
+@pytest.mark.parametrize("confirm, refused", [(None, True), ("main", True), ("test", False)])
+def test_staging_and_production_migrations_need_an_explicit_target(settings, confirm, refused):
+    """confirm: no confirmation, the main database's name (wrong target), or the test database's name (the target).
+    Names come from the configuration, so this holds wherever the test runs (e.g. agentx_ci_test in CI)."""
     env = {**os.environ, "ENVIRONMENT": "staging"}
     env.pop("AGENTX_MIGRATION_TARGET", None)
     if confirm:
-        env["AGENTX_MIGRATION_TARGET"] = confirm
+        env["AGENTX_MIGRATION_TARGET"] = settings.db_name if confirm == "main" else settings.db_test_name
     r = subprocess.run([sys.executable, "-m", "alembic", "-x", "db=test", "current"], cwd=BACKEND_DIR, env=env,
                        capture_output=True, text=True)
-    assert "alembic target database: agentx_test" in r.stderr
+    assert f"alembic target database: {settings.db_test_name}" in r.stderr
     assert (r.returncode != 0 and "refusing to migrate" in r.stderr) if refused else r.returncode == 0
