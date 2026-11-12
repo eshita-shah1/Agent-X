@@ -13,7 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { ApiError, loadToken, login, saveToken } from '@/lib/api';
+import { ApiError } from '@/lib/api';
+import { errorText, SignInForm, useSessionToken } from '@/components/auth/SignInForm';
 import {
   useAgentActionMutation,
   useAgentDecisionsQuery,
@@ -29,56 +30,8 @@ const STATUS_VARIANT: Record<AgentStatus, 'positive' | 'warning' | 'negative' | 
   STOPPED: 'default',
 };
 
-function errorText(error: unknown): string {
-  if (error instanceof ApiError) return `${error.status}: ${error.detail}`;
-  return error instanceof Error ? error.message : String(error);
-}
-
 function time(value: string | null): string {
   return value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) + ' IST' : 'never';
-}
-
-function SignIn({ onToken }: { onToken: (token: string) => void }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      onToken(await login(email, password));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form onSubmit={submit} className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-      <div className="space-y-1">
-        <Label htmlFor="agent-email">Email</Label>
-        <Input id="agent-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-      </div>
-      <div className="space-y-1">
-        <Label htmlFor="agent-password">Password</Label>
-        <Input
-          id="agent-password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-      </div>
-      <Button type="submit" disabled={busy}>
-        {busy ? 'Signing in…' : 'Sign in'}
-      </Button>
-      {error && <p className="text-[12px] text-[#DC2626] sm:col-span-3">{error}</p>}
-    </form>
-  );
 }
 
 function actionsFor(status: AgentStatus): AgentAction[] {
@@ -224,13 +177,8 @@ function StatusView({ token, status }: { token: string; status: AgentStatusRespo
 }
 
 export function AgentControlPanel() {
-  const [token, setToken] = useState<string | null>(() => loadToken());
+  const [token, setSession] = useSessionToken();
   const status = useAgentStatusQuery(token);
-
-  const setSession = (value: string | null) => {
-    saveToken(value);
-    setToken(value);
-  };
   const unauthorized = status.error instanceof ApiError && status.error.status === 401;
 
   return (
@@ -250,7 +198,7 @@ export function AgentControlPanel() {
         )}
       </div>
 
-      {(!token || unauthorized) && <SignIn onToken={setSession} />}
+      {(!token || unauthorized) && <SignInForm onToken={setSession} idPrefix="agent" />}
       {token && status.isLoading && <p className="mt-3 text-[12px] text-[#71717A]">Loading agent status…</p>}
       {token && status.isError && !unauthorized && (
         <p className="mt-3 text-[12px] text-[#DC2626]">Backend unavailable: {errorText(status.error)}</p>

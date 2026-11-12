@@ -1,458 +1,302 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Calendar, ChevronDown, ChevronRight, ChevronUp, Download, Search } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, LogOut, Plus, RefreshCw, Search } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PageFooter } from '@/components/layout/PageFooter';
 import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { KpiCard } from '@/components/shared/KpiCard';
-import { JournalReportView } from '@/components/journal/JournalReportView';
-import { TradeAssistantChat } from '@/components/journal/TradeAssistantChat';
-import { MOCK_JOURNAL_REPORTS } from '@/data/mockJournal';
-import { downloadTextFile } from '@/lib/csvExport';
-import { cn, formatINR } from '@/lib/utils';
-import { useAppStore } from '@/store/useAppStore';
+import { QueryStateWrapper } from '@/components/shared/QueryStateWrapper';
+import { SignInForm, errorText, useSessionToken } from '@/components/auth/SignInForm';
+import { EntryDetail, OUTCOME_VARIANT, ist } from '@/components/journal/EntryDetail';
+import { EntryForm, selectClass } from '@/components/journal/EntryForm';
+import {
+  PAGE_SIZE,
+  useInstruments,
+  useJournalEntry,
+  useJournalOverview,
+  useJournalSearch,
+  useJournalTags,
+  useStrategies,
+  useSyncJournal,
+} from '@/hooks/useJournalQueries';
+import { ApiError } from '@/lib/api';
+import { cn } from '@/lib/utils';
+import type { JournalFilters } from '@/types/journal';
 
-type JournalPeriod = 'This month · Nov 2026' | 'Last 3 months' | 'All sessions';
+// The trading journal on real backend data (Phase 6). Automatic entries are created from the account's own orders,
+// fills, agent decisions and events (POST /journal/sync, idempotent); manual entries are the user's notes. Nothing on
+// this page is mock data, and nothing here can place, change or cancel an order.
+
+const EMPTY: JournalFilters = {
+  q: '',
+  instrument_id: '',
+  strategy_id: '',
+  date_from: '',
+  date_to: '',
+  outcome: '',
+  entry_type: '',
+  tag: '',
+};
+const OUTCOMES = ['WIN', 'LOSS', 'BREAKEVEN', 'OPEN', 'REJECTED', 'CANCELLED', 'UNKNOWN', 'NONE'];
 
 export function JournalPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const initialInstrument = searchParams.get('instrument');
+  const [token, setToken] = useSessionToken();
+  const [draft, setDraft] = useState<JournalFilters>(EMPTY);
+  const [filters, setFilters] = useState<JournalFilters>(EMPTY);
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
 
-  const trades = useAppStore((s) => s.trades);
-  const pushToast = useAppStore((s) => s.pushToast);
-  const numberFormat = useAppStore((s) => s.settings.regional.numberFormat);
+  const overview = useJournalOverview(token);
+  const search = useJournalSearch(token, filters, offset);
+  const entry = useJournalEntry(token, selected);
+  const tags = useJournalTags(token);
+  const instruments = useInstruments(token);
+  const strategies = useStrategies(token);
+  const sync = useSyncJournal(token);
+  const synced = useRef(false);
 
-  const [query, setQuery] = useState('');
-  const [period, setPeriod] = useState<JournalPeriod>('This month · Nov 2026');
-  const [showAll, setShowAll] = useState(false);
-  const [selectedInstrument, setSelectedInstrument] = useState<string | null>(
-    initialInstrument
-  );
-
+  const unauthorized = [overview.error, search.error].some((e) => e instanceof ApiError && e.status === 401);
   useEffect(() => {
-    if (initialInstrument) {
-      setSelectedInstrument(initialInstrument);
+    // Bring automatic entries up to date once per visit (idempotent: repeats create nothing).
+    if (token && !unauthorized && !synced.current) {
+      synced.current = true;
+      sync.mutate(undefined);
     }
-  }, [initialInstrument]);
+  }, [token, unauthorized, sync]);
 
-  // Filter trades by selected period
-  const periodTrades = useMemo(() => {
-    if (period === 'This month · Nov 2026') return trades;
-    if (period === 'Last 3 months') return trades;
-    return trades;
-  }, [trades, period]);
-
-  // Build unique list of previously traded instruments ordered by most recent closed/executed trade
-  const tradedInstruments = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        instrument: string;
-        instrumentName: string;
-        dateLabel: string;
-        timeLabel: string;
-        strategy: string;
-        direction: string;
-        latestPnl: number;
-        statusLabel: string;
-        tradeId: string;
-      }
-    >();
-
-    // Seed with curated top reports order matching Figma screenshot (BANKNIFTY, RELIANCE, HDFCBANK, ICICIBANK, NIFTY 50)
-    const closedFirst = [
-      ...periodTrades.filter((t) => Number(t.id.replace('#TR-', '')) > 24),
-      ...periodTrades.filter((t) => t.id === '#TR-0021'),
-      ...periodTrades.filter((t) => t.status !== 'Open'),
-      ...periodTrades.filter((t) => t.status === 'Open'),
-    ];
-
-    for (const t of closedFirst) {
-      if (!map.has(t.instrument)) {
-        const matchingReport = MOCK_JOURNAL_REPORTS.find(
-          (r) => r.instrument === t.instrument
-        );
-        map.set(t.instrument, {
-          instrument: t.instrument,
-          instrumentName: t.instrumentName,
-          dateLabel: matchingReport?.dateLabel ?? t.entryDate,
-          timeLabel: matchingReport?.timeLabel ?? t.entryTime,
-          strategy: matchingReport?.strategy ?? t.strategy,
-          direction: matchingReport?.direction ?? t.direction,
-          latestPnl: matchingReport?.grossPnl ?? t.netPnl ?? 0,
-          statusLabel: t.status === 'Open' ? 'Open position' : 'Closed trade',
-          tradeId: matchingReport?.tradeId ?? t.id,
-        });
-      }
-    }
-
-    return Array.from(map.values());
-  }, [periodTrades]);
-
-  const filteredInstruments = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return tradedInstruments;
-    return tradedInstruments.filter(
-      (item) =>
-        item.instrument.toLowerCase().includes(q) ||
-        item.instrumentName.toLowerCase().includes(q) ||
-        item.strategy.toLowerCase().includes(q) ||
-        item.direction.toLowerCase().includes(q)
-    );
-  }, [tradedInstruments, query]);
-
-  const visibleInstruments = showAll
-    ? filteredInstruments
-    : filteredInstruments.slice(0, 5);
-
-  const closedTrades = periodTrades.filter((t) => t.status !== 'Open');
-  const wins = closedTrades.filter((t) => (t.netPnl ?? 0) > 0).length;
-  const winRate = closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : 0;
-  const realisedTotal = closedTrades.reduce((acc, t) => acc + (t.netPnl ?? 0), 0);
-
-  // Resolve report for Detailed View (fallback synthesized cleanly from trade if not in pre-authored list)
-  const activeReport = useMemo(() => {
-    if (!selectedInstrument) return null;
-    const found = MOCK_JOURNAL_REPORTS.find(
-      (r) => r.instrument === selectedInstrument
-    );
-    if (found) return found;
-
-    const fallbackTrade =
-      trades.find((t) => t.instrument === selectedInstrument) ?? trades[0];
-    const isWin = (fallbackTrade.netPnl ?? 0) >= 0;
-    const riskAmt = Math.round(
-      Math.abs(fallbackTrade.entryPrice - fallbackTrade.stopLoss) *
-        fallbackTrade.quantity
-    );
-
-    return {
-      instrument: fallbackTrade.instrument,
-      instrumentName: fallbackTrade.instrumentName,
-      tradeId: fallbackTrade.id,
-      dateLabel: fallbackTrade.entryDate,
-      timeLabel: fallbackTrade.entryTime,
-      strategy: fallbackTrade.strategy,
-      direction: fallbackTrade.direction,
-      status: fallbackTrade.status,
-      grossPnl: fallbackTrade.netPnl ?? 0,
-      returnOnNotional: Number(
-        (
-          ((fallbackTrade.netPnl ?? 0) /
-            Math.max(1, fallbackTrade.entryPrice * fallbackTrade.quantity)) *
-          100
-        ).toFixed(2)
-      ),
-      riskReward: `${fallbackTrade.rMultiple ? fallbackTrade.rMultiple.toFixed(2) : isWin ? '1.40' : '-1.00'}R`,
-      timeInTrade: fallbackTrade.timeInTrade ?? '32m',
-      thesis: `${fallbackTrade.strategy} entered ${fallbackTrade.direction.toLowerCase()} on ${fallbackTrade.instrument} at ${fallbackTrade.entryTime} following intraday structure confirmation.`,
-      entryTime: fallbackTrade.entryTime,
-      entryPrice: fallbackTrade.entryPrice,
-      quantity: fallbackTrade.quantity,
-      stopPrice: fallbackTrade.stopLoss,
-      plannedRisk: Math.max(500, riskAmt),
-      exitTime: fallbackTrade.entryTime,
-      exitPrice: fallbackTrade.exitPrice ?? fallbackTrade.entryPrice,
-      exitReason:
-        fallbackTrade.status === 'Stopped'
-          ? 'Stop loss triggered · Risk capped'
-          : fallbackTrade.status === 'Closed'
-            ? 'Target / rule exit completed'
-            : 'Position currently open',
-      plannedTarget: fallbackTrade.target,
-      performanceReview: `Trade ${fallbackTrade.id} generated ${formatINR(fallbackTrade.netPnl ?? 0, { showSign: true })} across ${fallbackTrade.quantity} units with predefined stop protection at ₹${fallbackTrade.stopLoss.toLocaleString('en-IN')}.`,
-      insights: [
-        {
-          index: '01',
-          title: 'Predefined risk honoured',
-          description: `Stop loss was placed at entry and bounded maximum loss exposure.`,
-        },
-        {
-          index: '02',
-          title: 'Track strategy consistency',
-          description: `Evaluate ${fallbackTrade.strategy} across at least 20 sessions before tuning thresholds.`,
-        },
-      ],
-      initialMessages: [
-        {
-          id: `init-${fallbackTrade.id}`,
-          role: 'assistant' as const,
-          content: `Loaded ${fallbackTrade.instrument} (${fallbackTrade.id}). Ask about entry timing, risk-to-reward, or strategy execution.`,
-          timestamp: 'Now',
-        },
-      ],
-      suggestedFollowUps: [
-        'How could I improve the entry?',
-        'Compare with my losing trades',
-      ],
-    };
-  }, [selectedInstrument, trades]);
-
-  const handleOpenReport = (symbol: string) => {
-    setSelectedInstrument(symbol);
-    setSearchParams({ instrument: symbol });
+  const apply = (event?: React.FormEvent) => {
+    event?.preventDefault();
+    setFilters(draft);
+    setOffset(0);
   };
+  const setField = (key: keyof JournalFilters) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setDraft((f) => ({ ...f, [key]: e.target.value }));
+  const strategyIds = strategies.data?.strategies.map((s) => s.strategy_id) ?? [];
+  const page = search.data;
 
-  const handleBackToList = () => {
-    setSelectedInstrument(null);
-    setSearchParams({});
-  };
-
-  const handleExportReport = () => {
-    if (!activeReport) return;
-    const md = [
-      `# AgentX Trade Journal Report — ${activeReport.instrument} (${activeReport.tradeId})`,
-      `Date: ${activeReport.dateLabel} | Strategy: ${activeReport.strategy} | Direction: ${activeReport.direction} | Status: ${activeReport.status}`,
-      '',
-      `## Metrics`,
-      `- Gross P&L: ${formatINR(activeReport.grossPnl, { showSign: true })}`,
-      `- Return on Notional: ${activeReport.returnOnNotional}%`,
-      `- Risk / Reward: ${activeReport.riskReward}`,
-      `- Time in Trade: ${activeReport.timeInTrade}`,
-      '',
-      `## Trade Thesis`,
-      activeReport.thesis,
-      '',
-      `## Performance Review`,
-      activeReport.performanceReview,
-      '',
-      `## Insights for the Next Trade`,
-      ...activeReport.insights.map((i) => `${i.index}. ${i.title}: ${i.description}`),
-    ].join('\n');
-
-    downloadTextFile(
-      `agentx-journal-${activeReport.instrument.toLowerCase().replace(/\s+/g, '-')}-${activeReport.tradeId.replace('#', '')}.md`,
-      md,
-      'text/markdown;charset=utf-8;'
-    );
-
-    pushToast({
-      title: 'Journal report exported',
-      description: `${activeReport.instrument} (${activeReport.tradeId}) downloaded as Markdown.`,
-      variant: 'success',
-    });
-  };
-
-  // Detailed Two-Column Report View
-  if (activeReport) {
-    return (
-      <div className="space-y-4">
-        <PageHeader
-          title="Trade Journal"
-          subtitle="Instrument report · Review, reflect, refine."
-          actions={
-            <>
-              <Button variant="outline" onClick={handleBackToList}>
-                <ArrowLeft className="h-3.5 w-3.5" />
-                All instruments
-              </Button>
-              <Button variant="default" onClick={handleExportReport}>
-                <Download className="h-3.5 w-3.5" />
-                Export report
-              </Button>
-            </>
-          }
-        />
-
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_360px]">
-          <JournalReportView report={activeReport} />
-          <TradeAssistantChat report={activeReport} />
-        </div>
-
-        <PageFooter leftText="Sample journal · Simulated executions · AI insights are for review, not trading advice." />
-      </div>
-    );
-  }
-
-  // Overview Screen
   return (
     <div className="space-y-4">
       <PageHeader
         title="Trade Journal"
-        subtitle="Review the decision, not just the outcome."
+        subtitle="Your trading records, notes and reflections. Paper trading only."
         actions={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                <Calendar className="h-3.5 w-3.5 text-[#71717A]" />
-                {period}
-                <ChevronDown className="h-3.5 w-3.5 text-[#71717A]" />
+          token && !unauthorized ? (
+            <>
+              <Button variant="outline" onClick={() => sync.mutate(undefined)} disabled={sync.isPending}>
+                <RefreshCw className={cn('h-3.5 w-3.5', sync.isPending && 'animate-spin')} />
+                Sync from trading records
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {(['This month · Nov 2026', 'Last 3 months', 'All sessions'] as JournalPeriod[]).map(
-                (opt) => (
-                  <DropdownMenuItem key={opt} onClick={() => setPeriod(opt)}>
-                    {opt}
-                  </DropdownMenuItem>
-                )
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <Button onClick={() => { setCreating(true); setSelected(null); }}>
+                <Plus className="h-3.5 w-3.5" />
+                New note
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setToken(null)}>
+                <LogOut className="h-3.5 w-3.5" />
+                Sign out
+              </Button>
+            </>
+          ) : undefined
         }
       />
 
-      {/* Full-Width Search Bar */}
-      <Card className="flex items-center justify-between gap-3 px-4 py-2.5">
-        <div className="flex flex-1 items-center gap-2.5">
-          <Search className="h-4 w-4 shrink-0 text-[#71717A]" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all previously traded instruments..."
-            className="w-full bg-transparent text-[13px] text-[#18181B] placeholder:text-[#71717A] focus:outline-none"
-          />
-        </div>
-        <span className="hidden text-[11.5px] text-[#71717A] sm:inline">
-          Search by symbol or name
-        </span>
-      </Card>
-
-      {/* Three Summary KPI Cards */}
-      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-        <KpiCard
-          label="executed trades"
-          value={String(trades.length)}
-          subtext={`${closedTrades.length} closed · ${trades.length - closedTrades.length} open`}
-        />
-        <KpiCard
-          label="win rate"
-          value={`${winRate.toFixed(1)}%`}
-          subtext={`${wins} of ${closedTrades.length} closed trades`}
-        />
-        <KpiCard
-          label="realised P&L"
-          value={formatINR(realisedTotal, { showSign: true, numberFormat })}
-          subtext="After fees and slippage"
-          tone={realisedTotal >= 0 ? 'positive' : 'negative'}
-        />
-      </div>
-
-      {/* Recently Traded Instruments */}
-      <div className="pt-1">
-        <div className="mb-3">
-          <h2 className="text-[15px] font-semibold text-[#18181B]">
-            Recently traded instruments
-          </h2>
-          <p className="mt-0.5 text-[11.5px] text-[#71717A]">
-            Your five most recent instruments. Open one to review its trades.
-          </p>
-        </div>
-
-        <Card className="overflow-hidden">
-          <div className="hidden grid-cols-[1.3fr_1.4fr_1fr_auto] gap-4 border-b border-[#F4F4F5] px-5 py-2.5 text-[10px] font-medium uppercase tracking-[0.07em] text-[#71717A] sm:grid">
-            <span>INSTRUMENT</span>
-            <span>LAST CLOSED TRADE</span>
-            <span>LATEST REALISED P&amp;L</span>
-            <span className="pr-4 text-right">REPORT</span>
-          </div>
-
-          <div className="divide-y divide-[#F4F4F5]">
-            {visibleInstruments.length === 0 ? (
-              <div className="px-5 py-10 text-center text-xs text-[#71717A]">
-                No traded instruments match &ldquo;{query}&rdquo;.
-              </div>
-            ) : (
-              visibleInstruments.map((item) => {
-                const pos = item.latestPnl >= 0;
-                return (
-                  <div
-                    key={item.instrument}
-                    className="grid grid-cols-1 items-center gap-3 px-5 py-4 transition-colors hover:bg-[#F9FAFB]/70 sm:grid-cols-[1.3fr_1.4fr_1fr_auto]"
-                  >
-                    <div>
-                      <p className="text-[13.5px] font-semibold text-[#18181B]">
-                        {item.instrument}
-                      </p>
-                      <p className="mt-0.5 text-[11.5px] text-[#71717A]">
-                        {item.instrumentName}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-[12.5px] text-[#18181B] tabular-nums">
-                        {item.dateLabel} · {item.timeLabel}
-                      </p>
-                      <p className="mt-0.5 text-[11.5px] text-[#71717A]">
-                        {item.strategy} · {item.direction}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p
-                        className={cn(
-                          'text-[13.5px] font-semibold tabular-nums',
-                          pos ? 'text-[#16A34A]' : 'text-[#DC2626]'
-                        )}
-                      >
-                        {formatINR(item.latestPnl, { showSign: true, numberFormat })}
-                      </p>
-                      <p className="mt-0.5 text-[11.5px] text-[#71717A]">
-                        {item.statusLabel}
-                      </p>
-                    </div>
-
-                    <div className="flex justify-end">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleOpenReport(item.instrument)}
-                        className="gap-1.5"
-                      >
-                        View report
-                        <ChevronRight className="h-3.5 w-3.5 text-[#71717A]" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+      {(!token || unauthorized) && (
+        <Card className="p-5">
+          <h2 className="text-[15px] font-semibold text-[#18181B]">Sign in to your journal</h2>
+          <p className="mt-0.5 text-[11.5px] text-[#71717A]">Journal entries are private to your account.</p>
+          <SignInForm onToken={setToken} idPrefix="journal" />
         </Card>
+      )}
 
-        {/* See More Action */}
-        {filteredInstruments.length > 5 && (
-          <div className="mt-4 flex justify-end sm:justify-center">
-            <Button
-              variant="outline"
-              onClick={() => setShowAll((prev) => !prev)}
-              className="gap-1.5 px-5"
-            >
-              {showAll ? (
+      {token && !unauthorized && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard label="Journal entries" value={overview.data ? String(overview.data.total) : '—'}
+                     subtext={overview.data ? `latest ${ist(overview.data.latest_occurred_at)}` : undefined} />
+            <KpiCard label="Automatic entries" value={overview.data ? String(overview.data.automatic) : '—'}
+                     subtext="from orders, fills, signals and agent events" />
+            <KpiCard label="Manual notes" value={overview.data ? String(overview.data.manual) : '—'} />
+            <KpiCard label="Trade reflections" value={overview.data ? String(overview.data.reflections) : '—'} />
+          </div>
+          {sync.data && (
+            <p className="text-[12px] text-[#71717A]">
+              Synced the last 30 days: {sync.data.created} new automatic {sync.data.created === 1 ? 'entry' : 'entries'}.
+            </p>
+          )}
+          {sync.isError && <p className="text-[12px] text-[#DC2626]">Sync failed: {errorText(sync.error)}</p>}
+
+          <Card className="p-4">
+            <form onSubmit={apply} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="space-y-1 sm:col-span-2">
+                <Label htmlFor="jq">Search titles and notes</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-[#A1A1AA]" />
+                  <Input id="jq" className="pl-8" value={draft.q} onChange={setField('q')} maxLength={200}
+                         placeholder="e.g. breakout patience" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="jfrom">From</Label>
+                <Input id="jfrom" type="date" value={draft.date_from} onChange={setField('date_from')} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="jto">To</Label>
+                <Input id="jto" type="date" value={draft.date_to} onChange={setField('date_to')} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="jinst">Instrument</Label>
+                <select id="jinst" className={selectClass} value={draft.instrument_id} onChange={setField('instrument_id')}>
+                  <option value="">All</option>
+                  {(instruments.data ?? []).map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.symbol}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="jstrat">Strategy</Label>
+                <select id="jstrat" className={selectClass} value={draft.strategy_id} onChange={setField('strategy_id')}>
+                  <option value="">All</option>
+                  {strategyIds.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="jout">Outcome</Label>
+                <select id="jout" className={selectClass} value={draft.outcome} onChange={setField('outcome')}>
+                  <option value="">All</option>
+                  {OUTCOMES.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor="jtype">Type</Label>
+                  <select id="jtype" className={selectClass} value={draft.entry_type} onChange={setField('entry_type')}>
+                    <option value="">All</option>
+                    <option value="AUTO">Automatic</option>
+                    <option value="MANUAL">Manual</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="jtag">Tag</Label>
+                  <select id="jtag" className={selectClass} value={draft.tag} onChange={setField('tag')}>
+                    <option value="">All</option>
+                    {(tags.data ?? []).map((t) => (
+                      <option key={t.name} value={t.name}>
+                        {t.name} ({t.entries})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-4 lg:justify-end">
+                <Button type="button" variant="ghost" onClick={() => { setDraft(EMPTY); setFilters(EMPTY); setOffset(0); }}>
+                  Clear
+                </Button>
+                <Button type="submit">Apply filters</Button>
+              </div>
+            </form>
+          </Card>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+            <div className="space-y-2">
+              <QueryStateWrapper
+                isLoading={search.isLoading}
+                isError={search.isError}
+                errorMessage={search.error ? errorText(search.error) : undefined}
+                onRetry={() => search.refetch()}
+                isEmpty={page?.items.length === 0}
+                emptyTitle="No journal entries"
+                emptyDescription="Sync from your trading records or write a note. Filters may be hiding entries."
+              >
+                <Card className="divide-y divide-[#F4F4F5]">
+                  {page?.items.map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => { setSelected(e.id); setCreating(false); }}
+                      className={cn(
+                        'block w-full px-4 py-3 text-left transition-colors hover:bg-[#F9FAFB]',
+                        selected === e.id && 'bg-[#F4F4F5]'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-[13px] font-medium text-[#18181B]">{e.title}</p>
+                        {e.outcome !== 'NONE' && <Badge variant={OUTCOME_VARIANT[e.outcome]}>{e.outcome}</Badge>}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-[#71717A]">
+                        <Badge variant={e.entry_type === 'AUTO' ? 'slate' : 'outline'}>
+                          {e.entry_type === 'AUTO' ? 'Auto' : 'Manual'}
+                        </Badge>
+                        <span>{ist(e.occurred_at)}</span>
+                        {e.has_reflection && <span>· reflected</span>}
+                        {e.tags.map((t) => (
+                          <span key={t}>#{t}</span>
+                        ))}
+                      </div>
+                    </button>
+                  ))}
+                </Card>
+              </QueryStateWrapper>
+              {page && page.total > 0 && (
+                <div className="flex items-center justify-between text-[12px] text-[#71717A]">
+                  <span>
+                    {offset + 1}–{Math.min(offset + PAGE_SIZE, page.total)} of {page.total}
+                  </span>
+                  <div className="flex gap-1">
+                    <Button size="icon" variant="outline" aria-label="Previous page" disabled={offset === 0}
+                            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="outline" aria-label="Next page" disabled={offset + PAGE_SIZE >= page.total}
+                            onClick={() => setOffset(offset + PAGE_SIZE)}>
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <Card className="p-5">
+              {creating && (
                 <>
-                  Show Less
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </>
-              ) : (
-                <>
-                  See More ({filteredInstruments.length - 5} more)
-                  <ChevronDown className="h-3.5 w-3.5" />
+                  <h2 className="mb-3 text-[15px] font-semibold text-[#18181B]">New journal note</h2>
+                  <EntryForm token={token} entry={null} instruments={instruments.data ?? []} strategies={strategyIds}
+                             onDone={(id) => { setCreating(false); setSelected(id); }} />
                 </>
               )}
-            </Button>
+              {!creating && selected === null && (
+                <p className="text-[12.5px] text-[#71717A]">
+                  Select an entry to see its trading facts, explanation and your notes, or create a new note.
+                </p>
+              )}
+              {!creating && selected !== null && entry.isLoading && (
+                <p className="text-[12px] text-[#71717A]">Loading entry…</p>
+              )}
+              {!creating && selected !== null && entry.isError && (
+                <p className="text-[12px] text-[#DC2626]">{errorText(entry.error)}</p>
+              )}
+              {!creating && entry.data && selected === entry.data.id && (
+                <EntryDetail key={entry.data.id} token={token} entry={entry.data} instruments={instruments.data ?? []}
+                             strategies={strategyIds} onDeleted={() => setSelected(null)} />
+              )}
+            </Card>
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      {/* Bottom Pattern Note */}
-      <div className="pt-2">
-        <p className="text-[13.5px] font-semibold text-[#18181B]">
-          Find patterns in the process.
-        </p>
-        <p className="mt-0.5 text-[11.5px] text-[#71717A]">
-          Each report connects your strategy, execution and outcome in one place.
-        </p>
-      </div>
-
-      <PageFooter leftText="Sample journal · Simulated executions · AI insights are for review, not trading advice." />
+      <PageFooter />
     </div>
   );
 }

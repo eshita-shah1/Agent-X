@@ -5,6 +5,7 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { TradingPage } from '@/pages/TradingPage';
 import { PortfolioPage } from '@/pages/PortfolioPage';
 import { JournalPage } from '@/pages/JournalPage';
+import { InsightsPage } from '@/pages/InsightsPage';
 import { BacktestingPage } from '@/pages/BacktestingPage';
 import { RiskManagementPage } from '@/pages/RiskManagementPage';
 import { BenchmarkPage } from '@/pages/BenchmarkPage';
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="/trading" element={<TradingPage />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
             <Route path="/journal" element={<JournalPage />} />
+            <Route path="/insights" element={<InsightsPage />} />
             <Route path="/backtesting" element={<BacktestingPage />} />
             <Route path="/risk" element={<RiskManagementPage />} />
             <Route path="/benchmark" element={<BenchmarkPage />} />

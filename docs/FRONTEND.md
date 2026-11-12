@@ -2,7 +2,19 @@
 
 The `frontend/` directory holds the Agent-X web UI. It was imported unchanged from the standalone frontend project. The only integration changes are a development proxy in `vite.config.ts`, `frontend/.env.example` and `frontend/.gitignore`.
 
-**Status: the UI runs on mock data, except the Dashboard's Agent control panel (Phase 5).** That panel signs in (`POST /auth/login`; token kept in this tab's sessionStorage) and shows only the backend's real agent state: status, mode, blockers, disclosures, recent decisions, and start/pause/resume/stop/kill-switch controls (`src/components/agent/`, `src/hooks/useAgentQueries.ts`, `src/lib/api.ts`). The rest of the UI does not call the backend yet. Every number shown is generated in the browser (`src/data/mock*.ts`, `src/lib/marketData.ts`), including prices, trades, portfolio, risk, backtests and benchmarks. None of it is market data, a simulation result or a backtest result.
+**Status: the UI runs on mock data, except the Dashboard's Agent control panel (Phase 5) and the Trade Journal and Daily Insights pages (Phase 6).** That panel signs in (`POST /auth/login`; token kept in this tab's sessionStorage) and shows only the backend's real agent state: status, mode, blockers, disclosures, recent decisions, and start/pause/resume/stop/kill-switch controls (`src/components/agent/`, `src/hooks/useAgentQueries.ts`, `src/lib/api.ts`). The Trade Journal (`/journal`) and Daily Insights (`/insights`) pages (`src/pages/JournalPage.tsx`, `src/pages/InsightsPage.tsx`, `src/components/journal/`, `src/components/explanations/`, `src/hooks/useJournalQueries.ts`, `src/types/journal.ts`) show only backend data:
+- journal entries;
+- search and filters;
+- notes, tags and reflections;
+- linked trade details;
+- explanations, kept in three labelled tiers: verified facts, rule-based explanation, and the optional AI
+  interpretation (never shown as an instruction);
+- the session summary;
+- journal analytics with their caveats.
+
+The former mock journal reports and the scripted "trade assistant" chat, which invented statistics, were removed.
+Sign-in is shared by these pages and the agent panel (`src/components/auth/SignInForm.tsx`). The rest of the UI does not
+call the backend yet. Every number shown is generated in the browser (`src/data/mock*.ts`, `src/lib/marketData.ts`), including prices, trades, portfolio, risk, backtests and benchmarks. None of it is market data, a simulation result or a backtest result.
 
 ## Stack and commands
 
@@ -51,7 +63,8 @@ These gaps are documented, not worked around. No backend endpoint was added or c
 | Risk management | Mock limits, exposure, streaks, alerts | `GET/PUT /risk/settings`, `GET /risk/state`, `POST /risk/kill-switch`, `GET /risk/decisions` | Field names and limits differ; it needs mapping. Exposure history, streak and scatter analytics have no endpoint. |
 | Backtesting lab | Single strategy name, symbol, date-range label, stop/target/slippage %; synchronous result | `POST /backtests`: `instrument_ids`, `start`/`end` dates, `mode` (REGIME_PRIORITY / PINNED), `candidates` with `strategy_id`/params, cost model in bps; runs **asynchronously**; results via `/backtests/{id}/...` | Different request shape, and the UI needs to poll for results. Strategies come from `GET /backtests/strategies`. About 60 days of 5m data limits ranges. |
 | Benchmark | Mock strategy vs Buy-and-Hold comparison and metrics | The Buy-and-Hold benchmark is computed inside backtest runs | No standalone benchmark endpoint; read it from a backtest run. |
-| Journal and trade assistant chat | Mock reports and a scripted chat | None (LLM journal is Phase 7) | No backend. The LLM may only explain decisions, never make them. |
+| Trade Journal | Real entries, search, filters, notes, tags, reflections, explanation panel (Phase 6) | `/api/v1/journal/*`, `/api/v1/explanations/*` | None for the listed features. The LLM only explains, never decides. |
+| Daily Insights | Real session summary and journal analytics (Phase 6) | `/explanations/daily-summary`, `/journal/analytics` | No chart of P&L over time (no time-series endpoint). |
 | Settings | Local Zustand state | Risk settings only | Workspace preferences are UI-local. |
 
 ## Recommended order of integration (not done)
