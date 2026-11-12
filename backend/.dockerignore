@@ -1,5 +1,8 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-tests/
+# Keep the build context minimal and secret-free.
+**/__pycache__
+**/*.pyc
+.pytest_cache
+tests
 .env
+.env.*
+*.dump

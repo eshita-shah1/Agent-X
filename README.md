@@ -28,9 +28,9 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
 | 4 | Risk engine and Mock Exchange | **Approved by the owner (2026-11-12).** Simulation-only staging approved; the staging run on real fresh data is pending the 2026-11-12 session. Simulated fills stay disabled outside staging until the real-environment items in [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md) §7.3 |
 | 5 | Agent orchestration | **Implemented, merged to `main` and tagged `phase-5-agent-orchestration`**. Runs SIGNALS_ONLY while execution is disabled; end-to-end paper execution awaits decision D15 ([docs/PHASE5.md](docs/PHASE5.md)) |
-| 6 | LLM explanations and trading journal | **Implemented, tested and approved by the owner** (branch `phase-6-journal-explanations`, not yet pushed or merged; development database not yet migrated to `0013`) ([docs/PHASE6.md](docs/PHASE6.md)). Backtesting and Buy-and-Hold, the original Phase 6, were delivered in Phase 3 |
+| 6 | LLM explanations and trading journal | **Approved and merged to `main`** (PR #6); development database migrated to `0013` ([docs/PHASE6.md](docs/PHASE6.md)). Backtesting and Buy-and-Hold, the original Phase 6, were delivered in Phase 3 |
 | 7 | (LLM layer and trading journal, moved into Phase 6) | Delivered in Phase 6 |
-| 8 | Hardening and deployment | Not started |
+| 8 | Production hardening, reliability, security and deployment readiness | **Implemented and tested, pending owner review** (branch `phase-8-hardening`, uncommitted; migration `0014` not yet applied to the development database). Provider-neutral: nothing is deployed ([docs/PHASE8.md](docs/PHASE8.md)) |
 
 Each phase is reviewed and approved by the project owner before it is committed, tagged (`phase-N-...`) and followed by the next. Futures support stays disabled until genuine contract-specific data exists; equities come first.
 
@@ -112,6 +112,11 @@ Open `Agent-X.code-workspace` in VS Code to work on the backend and frontend fro
 - [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
 - [docs/PHASE5.md](docs/PHASE5.md): the autonomous paper-trading agent: lifecycle, decisions, reconciliation, worker, migration 0012, limitations
 - [docs/PHASE6.md](docs/PHASE6.md): explanations, the optional LLM narrator and its fallback, the trading journal, analytics, migration 0013, security, limitations
+- [docs/PHASE8.md](docs/PHASE8.md): Phase 8 hardening: what changed, measurements, test plan, acceptance status
+- [docs/SECURITY.md](docs/SECURITY.md): security review, controls, dependency report, open items
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): provider-neutral deployment, environments, TLS, upgrade and rollback
+- [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md): backups, verification, isolated restore check, retention, migration safety
+- [docs/MONITORING.md](docs/MONITORING.md): health endpoints, agent observability, structured logs, alerts
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends, the agent worker
 - [docs/STAGING.md](docs/STAGING.md) and [docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md): validation procedures
 - [docs/FRONTEND.md](docs/FRONTEND.md): the web UI, how it connects to the API, and page-by-page integration gaps
@@ -141,7 +146,7 @@ the Phase 6 packages, which write only journal and explanation tables. Tests enf
 3. **Decided:** the backtest and the Mock Exchange keep separate simulation models (intraday research vs delivery paper execution; [docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
 4. **Phase 5:** agent orchestration, merged and tagged ([docs/PHASE5.md](docs/PHASE5.md)). Execution approval (D15) and the Phase 4 staging run (B9) are separate, outstanding milestones.
 5. **Phase 6:** LLM explanations and trading journal, implemented and approved ([docs/PHASE6.md](docs/PHASE6.md)). The LLM explains decisions only and never decides them. (This was Phase 7; Phase 6 was absorbed into Phase 3.)
-6. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
+6. **Phase 8:** production hardening, implemented and pending review ([docs/PHASE8.md](docs/PHASE8.md)): logout and login lockout, security headers, production configuration checks, operator-only ingestion outside development, structured logs, readiness with migration checks, agent observability, backups and restore checks, Docker and CI. Still open before hosting: a hosting decision, PostgreSQL row-level security, refresh tokens, a secrets manager ([docs/SECURITY.md](docs/SECURITY.md) §7).
 
 ## Repository layout
 
@@ -149,9 +154,11 @@ the Phase 6 packages, which write only journal and explanation tables. Tests enf
 backend/    FastAPI application, Alembic migrations, tests
 frontend/   React + TypeScript + Vite web UI (agent panel, journal and insights on the real API; other pages mock)
 docs/       setup, architecture, market-data, backtesting, API and frontend documentation
-docker-compose.yml, .env.example, .gitignore, .gitattributes, Agent-X.code-workspace
+scripts/    Windows scheduling, staging and recovery (restore-check provisioning) scripts
+.github/    CI (lint, migrations, tests, frontend build, dependency audits, Docker) and a gated image release workflow
+docker-compose.yml (local), docker-compose.prod.yml (provider-neutral production), .env.example, .gitignore, .gitattributes, Agent-X.code-workspace
 ```
 
 ## Security note
 
-Credentials live only in a git-ignored `.env`. This project is private during development. The current security posture is suitable for local use; items to address before any hosted deployment (refresh tokens, revocation, rate limiting, row-level security, secrets management) are listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Credentials live only in git-ignored files or the deployment environment, and production refuses to start with weak secrets. Phase 8 added logout, login lockout, security headers, request-size limits, safe errors, log redaction and operator-only ingestion outside development. Items still open before hosted deployment (row-level security, refresh tokens, a secrets manager, front-end dependency majors) are in [docs/SECURITY.md](docs/SECURITY.md).

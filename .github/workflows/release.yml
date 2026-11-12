@@ -1,0 +1,36 @@
+# Agent-X release (Phase 8). Manual only, and gated: the job uses the GitHub Environment "release", which must be
+# configured with required reviewers (Settings -> Environments) so a person approves every run. It builds the versioned
+# images from a tag and attaches them as artifacts. It does NOT deploy anywhere: no hosting provider has been chosen,
+# and deployment stays an explicit, approved operator step (docs/DEPLOYMENT.md). It never enables execution.
+name: Release images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to build (e.g. phase-8-hardening)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - name: Build images
+        run: |
+          docker build -t agentx-backend:${{ inputs.tag }} backend
+          docker build -t agentx-web:${{ inputs.tag }} frontend
+          docker save agentx-backend:${{ inputs.tag }} agentx-web:${{ inputs.tag }} | gzip > agentx-images-${{ inputs.tag }}.tar.gz
+          sha256sum agentx-images-${{ inputs.tag }}.tar.gz > agentx-images-${{ inputs.tag }}.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentx-images-${{ inputs.tag }}
+          path: agentx-images-${{ inputs.tag }}.tar.gz*
+          retention-days: 30

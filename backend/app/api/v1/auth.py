@@ -1,7 +1,8 @@
 import ipaddress
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -59,6 +60,17 @@ def login(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings_dep),
 ) -> TokenResponse:
+    # Brute-force protection (Phase 8): too many recent failures for this email -> 429, whether or not the account
+    # exists (so the response reveals nothing). Counted from the append-only audit log, not process memory.
+    since = datetime.now(UTC) - timedelta(minutes=settings.login_failure_window_minutes)
+    failures = db.scalar(select(func.count()).select_from(AuditEvent).where(
+        AuditEvent.event_type == "auth.login_failed", AuditEvent.details["email"].astext == body.email,
+        AuditEvent.created_at >= since))
+    if failures >= settings.login_max_failures:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed sign-in attempts; try again later",
+            headers={"Retry-After": str(settings.login_failure_window_minutes * 60)},
+        )
     user = db.scalar(select(User).where(User.email == body.email))
     # Always run a verification (against a dummy hash if the user is unknown) to equalise timing.
     valid = verify_password(body.password, user.password_hash if user else None)
@@ -88,3 +100,12 @@ def login(
 @router.get("/me", response_model=UserResponse)
 def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Response:
+    """Ends every session of the user: all access tokens issued up to now are refused from now on (migration 0014)."""
+    user.sessions_revoked_at = datetime.now(UTC)
+    db.add(AuditEvent(user_id=user.id, event_type="auth.logout", client_ip=_client_ip(request)))
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

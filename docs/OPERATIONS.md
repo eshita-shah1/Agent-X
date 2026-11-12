@@ -201,3 +201,24 @@ Design: [PHASE6.md](PHASE6.md). Nothing here runs on a schedule and nothing here
    rule-based.
 6. **Retention.** Stored explanations and automatic entries are kept, and no job deletes them. Manual entries are
    deleted only by their owner.
+
+## 9. Hardening operations (Phase 8)
+
+Details: [BACKUP_RESTORE.md](BACKUP_RESTORE.md), [MONITORING.md](MONITORING.md), [DEPLOYMENT.md](DEPLOYMENT.md).
+
+| Task | Command (from `backend/`) | Who |
+|---|---|---|
+| Backup with manifest | `python -m app.ops.cli backup --label <why>` | operator |
+| Verify a backup | `python -m app.ops.cli verify-backup <dump>` | operator |
+| Isolated restore check | `python -m app.ops.cli restore-check <dump> --target agentx_restore_check` (after the admin script) | operator |
+| Retention | `python -m app.ops.cli prune-backups [--apply]` | operator |
+| Health probe | `python -m app.monitoring.cli health` (exit 0/1/2) | monitor |
+| Migrate staging/production | `AGENTX_MIGRATION_TARGET=<db> alembic upgrade head` after a verified backup | owner |
+| End all sessions of a user | the user calls `POST /api/v1/auth/logout`; an operator can deactivate (`users.is_active=false`) | user / operator |
+
+Nothing above is scheduled automatically. Registering a scheduled backup or health probe is an owner decision (as for
+ingestion and the agent worker).
+
+**Pending owner action:** migrate the development database `agentx` from `0013` to `0014` (backup first,
+BACKUP_RESTORE.md §6). Until then this branch's code refuses authenticated requests against it, and `/health/ready`
+reports `unavailable`.

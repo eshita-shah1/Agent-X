@@ -10,8 +10,10 @@ from sqlalchemy import (
     ForeignKey,
     Numeric,
     String,
+    Index,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,6 +32,8 @@ class User(Base):
     # Migration 0008: operators may apply corporate-action adjustments and dividend credits system-wide. Set only by
     # the server-side CLI (`python -m app.ops.cli set-operator`), never through the API.
     is_operator: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Migration 0014: access tokens issued at or before this instant are refused (logout ends every session).
+    sessions_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -59,6 +63,11 @@ class AuditEvent(Base):
     """
 
     __tablename__ = "audit_events"
+    __table_args__ = (
+        # Migration 0014: the login-lockout count (failed logins per email within a window) without a table scan.
+        Index("ix_audit_events_login_failed_email", text("(details ->> 'email')"), "created_at",
+              postgresql_where=text("event_type = 'auth.login_failed'")),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(

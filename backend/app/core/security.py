@@ -46,6 +46,11 @@ def create_access_token(user_id: uuid.UUID, settings: Settings, now: datetime | 
 
 def decode_access_token(token: str, settings: Settings) -> uuid.UUID:
     """Return the user id from a valid token; raise InvalidTokenError otherwise."""
+    return decode_access_claims(token, settings)[0]
+
+
+def decode_access_claims(token: str, settings: Settings) -> tuple[uuid.UUID, datetime]:
+    """(user id, issued-at) from a valid token; raise InvalidTokenError otherwise."""
     try:
         claims = jwt.decode(
             token,
@@ -54,6 +59,6 @@ def decode_access_token(token: str, settings: Settings) -> uuid.UUID:
             issuer=settings.jwt_issuer,
             options={"require": ["exp", "iat", "iss", "sub"]},
         )
-        return uuid.UUID(claims["sub"])
-    except (jwt.PyJWTError, ValueError, KeyError) as exc:
+        return uuid.UUID(claims["sub"]), datetime.fromtimestamp(int(claims["iat"]), UTC)
+    except (jwt.PyJWTError, ValueError, KeyError, TypeError) as exc:
         raise InvalidTokenError("invalid token") from exc

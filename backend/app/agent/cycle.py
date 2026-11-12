@@ -32,6 +32,7 @@ from app.agent.pipeline import DecisionPipeline, InstrumentReport
 from app.agent.positions import FillPoint, assess, contexts_for_bars, flat_contexts, session_fills
 from app.agent.replay import ReplayError, run_replay, warmup_anchor
 from app.core.config import Settings
+from app.core.logging import bind_log_context, log_context
 from app.db.enums import AgentCycleStatus, AgentInstrumentStatus, AgentMode, AgentStatus
 from app.db.models import AgentCycle, AgentInstance, AgentInstrumentState
 from app.db.scoping import owned_select
@@ -78,7 +79,8 @@ def run_cycle(engine: Engine, factory: sessionmaker[Session], settings: Settings
             return {"agent_id": agent_id, "status": "SKIPPED_LOCKED"}
         lock_conn.commit()
         try:
-            return _locked_cycle(factory, settings, clock, agent_id, worker_id, registry)
+            with log_context(agent_id=agent_id, worker_id=worker_id):  # every log line of the cycle carries them
+                return _locked_cycle(factory, settings, clock, agent_id, worker_id, registry)
         finally:
             _unlock(lock_conn, agent_id)
             lock_conn.commit()
@@ -101,6 +103,7 @@ def _locked_cycle(factory, settings, clock, agent_id, worker_id, registry) -> di
         s.add(cycle)
         s.commit()
         cycle_id, user_id = cycle.id, agent.user_id
+    bind_log_context(cycle_id=cycle_id)
 
     summary: dict = {}
     # T1: Phase 4 duties
