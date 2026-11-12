@@ -1,7 +1,9 @@
 """session revocation and login-lockout index (Phase 8)
 
-Additive: one nullable column. Access tokens issued at or before this instant are refused, so POST /auth/logout (and an
-operator deactivating an account) ends every existing session without a token blacklist. No existing row changes.
+Additive: one nullable column, users.sessions_revoked_at, used only for session revocation: access tokens issued at or
+before this instant are refused, so POST /auth/logout ends every existing session of the user without a token blacklist.
+(Account deactivation is separate and unchanged: it uses users.is_active, which is checked on every request.) No
+existing row changes.
 A partial expression index serves the login-lockout count (failed logins per email within a window): measured on 100k
 failed-login rows, 83.9 ms (sequential scan, every login) -> 0.108 ms. Downgrade drops both (neither holds trading or
 accounting data); revoked tokens would then be accepted again until they expire.
