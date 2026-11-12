@@ -27,9 +27,9 @@ Agent-X is a deterministic quantitative trading and risk-management system with 
 | 2 | Market-data foundation: instrument registry, Yahoo/`yfinance` adapter, validation, archive with provenance, ingestion jobs, coverage/freshness, authenticated APIs | Approved, committed and pushed |
 | 3 | Indicators, five strategies, regime classification and session-locked selection, backtesting engine (NEXT_BAR_OPEN_V1), Buy-and-Hold benchmark, persisted user-owned backtest runs and APIs (approved decisions D1-D19) | **Implemented, tested and approved by the owner** |
 | 4 | Risk engine and Mock Exchange | **Approved by the owner (2026-11-12).** Simulation-only staging approved; the staging run on real fresh data is pending the 2026-11-12 session. Simulated fills stay disabled outside staging until the real-environment items in [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md) §7.3 |
-| 5 | Agent orchestration | **Implemented and tested, pending owner approval** (branch `phase-5-agent`, uncommitted). Runs SIGNALS_ONLY while execution is disabled; end-to-end paper execution awaits decision D15 ([docs/PHASE5.md](docs/PHASE5.md)) |
-| 6 | (Backtesting and Buy-and-Hold, moved into Phase 3) | Delivered in Phase 3 |
-| 7 | LLM layer and trading journal | Not started |
+| 5 | Agent orchestration | **Implemented, merged to `main` and tagged `phase-5-agent-orchestration`**. Runs SIGNALS_ONLY while execution is disabled; end-to-end paper execution awaits decision D15 ([docs/PHASE5.md](docs/PHASE5.md)) |
+| 6 | LLM explanations and trading journal | **Implemented and tested, pending owner review** (working tree on `main`, uncommitted; development database not yet migrated to `0013`) ([docs/PHASE6.md](docs/PHASE6.md)). Backtesting and Buy-and-Hold, the original Phase 6, were delivered in Phase 3 |
+| 7 | (LLM layer and trading journal, moved into Phase 6) | Delivered in Phase 6 |
 | 8 | Hardening and deployment | Not started |
 
 Each phase is reviewed and approved by the project owner before it is committed, tagged (`phase-N-...`) and followed by the next. Futures support stays disabled until genuine contract-specific data exists; equities come first.
@@ -49,7 +49,20 @@ Backtests are advisory and never select or activate strategies; about 60 days of
 Phase 4 adds a deterministic risk engine and a Mock Exchange (orders, fills at the next bar's open, an Indian-equity component cost model, append-only cash ledger, long-only positions, risk-state refresh); execution is disabled by default; for the MVP, fills will be **simulation-only** on unverified Yahoo Finance data once approved ([docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md)). **Five-year intraday backtesting is not available at launch**: Yahoo provides about 60 days of 5-minute history and the archive grows only prospectively.
 
 The Phase 3 backtest and the Phase 4 Mock Exchange are separate: backtests simulate their own NEXT_BAR_OPEN_V1 fills
-and never place orders. There is no agent, live trading or LLM functionality yet.
+and never place orders. Phase 5 adds the autonomous paper-trading agent ([docs/PHASE5.md](docs/PHASE5.md)).
+
+Phase 6 adds understanding and review, not control:
+- **Explanations:** layered explanations of signals, agent decisions, risk decisions, orders, fills and trading days,
+  built only from stored records, with their evidence.
+- **Optional LLM narrative:** disabled by default; a local OpenAI-compatible server or Claude can be used. Every number
+  a narrative states must come from the facts, and any failure falls back to the rule-based text.
+- **Trading journal:** automatic entries from trading records, manual notes, tags, full-text search, reflections and
+  descriptive analytics.
+
+The LLM never generates signals, sizes, submits or changes anything ([docs/PHASE6.md](docs/PHASE6.md)). There is no
+live trading.
+
+Agent execution approval (D15) and the Phase 4 staging run (B9) remain separate, outstanding milestones.
 
 **Market data in brief** (details and evidence in [docs/MARKET_DATA.md](docs/MARKET_DATA.md)):
 
@@ -64,7 +77,7 @@ and never place orders. There is no agent, live trading or LLM functionality yet
 ## Tech stack
 
 Python 3.14 · FastAPI · PostgreSQL 18 · SQLAlchemy 2 · Alembic · psycopg 3 · argon2id · PyJWT · pandas · NumPy · `yfinance` · pytest · Docker Compose.
-Planned: LangGraph. Scheduling (e.g. APScheduler) is not used; it may be reconsidered in a later phase.
+Optional (Phase 6): an OpenAI-compatible LLM server or the `anthropic` SDK for explanation narratives; none is required. Scheduling (e.g. APScheduler) is not used.
 
 ## Quick start
 
@@ -82,7 +95,7 @@ cd backend
 
 Interactive API docs: `http://localhost:8000/docs`. Full instructions, including Docker Compose, are in [docs/SETUP.md](docs/SETUP.md).
 
-**Frontend** (React + Vite, currently on mock data only; see [docs/FRONTEND.md](docs/FRONTEND.md)):
+**Frontend** (React + Vite; the agent panel, Trade Journal and Daily Insights use the real API, other pages are still mock data; see [docs/FRONTEND.md](docs/FRONTEND.md)):
 ```bash
 cd frontend && npm ci && npm run dev    # http://localhost:5173; /api is proxied to the backend on :8000
 ```
@@ -98,9 +111,10 @@ Open `Agent-X.code-workspace` in VS Code to work on the backend and frontend fro
 - [docs/PHASE4.md](docs/PHASE4.md): risk engine, Mock Exchange, decision D4, shared contracts, limitations
 - [docs/D4_EXECUTION_READINESS.md](docs/D4_EXECUTION_READINESS.md): simulation policy, cost model, corporate actions, dividends, blockers
 - [docs/PHASE5.md](docs/PHASE5.md): the autonomous paper-trading agent: lifecycle, decisions, reconciliation, worker, migration 0012, limitations
+- [docs/PHASE6.md](docs/PHASE6.md): explanations, the optional LLM narrator and its fallback, the trading journal, analytics, migration 0013, security, limitations
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): daily ingestion scheduling, latency and thresholds, operators, corporate actions, dividends, the agent worker
 - [docs/STAGING.md](docs/STAGING.md) and [docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md): validation procedures
-- [docs/FRONTEND.md](docs/FRONTEND.md): the web UI (mock data only), how it connects to the API, and page-by-page integration gaps
+- [docs/FRONTEND.md](docs/FRONTEND.md): the web UI, how it connects to the API, and page-by-page integration gaps
 
 ## Architecture in brief
 
@@ -110,27 +124,30 @@ Modular monolith (FastAPI, SQLAlchemy, PostgreSQL). Dependencies point one way:
 marketdata (archive) ──read──> backtest_runs (database runner) ──> backtest (pure engine)
                                                                     └─> strategies + selection ──> indicators
 marketdata (archive) ──read──> orders ──> risk (engine) ──> exchange (Mock Exchange, costs, accounting)
-api/v1 (auth, account, market, backtests, trading, operator) ──> services above
+api/v1 (auth, account, market, backtests, trading, operator, agent) ──> services above
+agent ──> orders (OrderService) ──> risk ──> exchange                       (Phase 5)
+api/v1 (explanations, journal) ──> explanations, journal ──read──> all of the records above   (Phase 6)
+                                   └──> llm (optional narrator: settings in, validated text out)
 ```
 
 The pure layers (indicators, strategies, selection, backtest engine) have no database, network, clock or LLM
-dependencies. The Phase 3 backtest and the Phase 4 execution path never import each other. Tests enforce these
-boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+dependencies. The Phase 3 backtest and the Phase 4 execution path never import each other. Nothing below the API imports
+the Phase 6 packages, which write only journal and explanation tables. Tests enforce these boundaries. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
 
 1. **Phase 3:** strategy and backtesting layer, implemented and approved; integrated with Phase 4 (migration `0009`).
 2. **Phase 4:** risk engine and Mock Exchange, implemented. Fills stay simulation-only until decision D4 ([docs/PHASE4.md](docs/PHASE4.md)).
 3. **Decided:** the backtest and the Mock Exchange keep separate simulation models (intraday research vs delivery paper execution; [docs/BACKTESTING.md](docs/BACKTESTING.md) §9).
-4. **Phase 5:** agent orchestration, implemented and pending approval ([docs/PHASE5.md](docs/PHASE5.md)).
-5. **Phase 7:** LLM explanations and trading journal. The LLM explains decisions only and never decides them.
+4. **Phase 5:** agent orchestration, merged and tagged ([docs/PHASE5.md](docs/PHASE5.md)). Execution approval (D15) and the Phase 4 staging run (B9) are separate, outstanding milestones.
+5. **Phase 6:** LLM explanations and trading journal, implemented and pending review ([docs/PHASE6.md](docs/PHASE6.md)). The LLM explains decisions only and never decides them. (This was Phase 7; Phase 6 was absorbed into Phase 3.)
 6. **Phase 8:** hardening and deployment. This includes operator-only ingestion, refresh tokens and row-level security.
 
 ## Repository layout
 
 ```
 backend/    FastAPI application, Alembic migrations, tests
-frontend/   React + TypeScript + Vite web UI (mock data only so far)
+frontend/   React + TypeScript + Vite web UI (agent panel, journal and insights on the real API; other pages mock)
 docs/       setup, architecture, market-data, backtesting, API and frontend documentation
 docker-compose.yml, .env.example, .gitignore, .gitattributes, Agent-X.code-workspace
 ```

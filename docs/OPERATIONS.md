@@ -176,3 +176,28 @@ Exit codes of `cycle`: `0` every cycle succeeded or was skipped (another worker 
 - **Risk settings** can be changed only while the agent is not RUNNING (`409 AGENT_RUNNING`).
 - **Orphaned positions** (`ORPHANED_OVERNIGHT`, an agent position whose 15:15 square-off did not fill) are never sold
   by the agent the next day. They stay under their Phase 4 stop-loss/take-profit; close them manually if required.
+
+## 8. Explanations and the trading journal (Phase 6)
+
+Design: [PHASE6.md](PHASE6.md). Nothing here runs on a schedule and nothing here can trade.
+
+1. **Migration (owner action).** Back up and migrate the development database to `0013`, following the `0012`
+   procedure (pg_dump, `alembic upgrade head`, `alembic check`, and before/after counts and checksums of orders, fills,
+   candles and risk settings). `0013` is additive: no existing row changes. Its downgrade is refused once journal or
+   explanation rows exist; to roll back, restore the backup.
+2. **LLM provider (optional).** Leave `LLM_PROVIDER=disabled` for rule-based explanations only. To use a local model:
+   set `LLM_PROVIDER=openai_compatible`, `LLM_BASE_URL=http://127.0.0.1:11434/v1` and `LLM_MODEL=...` (Ollama or
+   LM Studio; no key, no cost). To use Claude: `pip install anthropic`, then set `LLM_PROVIDER=anthropic` and
+   `LLM_API_KEY=...`. Check the result with `GET /api/v1/explanations/provider`: `enabled`, `configuration_problems`.
+   A misconfigured provider never stops the application; it is reported there and explanations stay rule-based.
+3. **Journal entries.** `POST /api/v1/journal/sync` (the Journal page calls it on open) creates the missing automatic
+   entries for the last 30 days. It is idempotent and safe to repeat. A session summary entry appears only after
+   15:30 IST.
+4. **Privacy.** With an external provider, prompts contain trading facts only (symbols, prices, ids). Journal notes
+   are sent only if `LLM_INCLUDE_JOURNAL_NOTES=true`. Logs (`agentx.llm`) record provider, model, status, error code and
+   latency, never prompts or keys.
+5. **Cost and abuse bound.** At most `LLM_MAX_REQUESTS_PER_USER_PER_HOUR` LLM calls per user per hour (stored
+   explanations, including failed ones, plus reflection drafts). Beyond that, responses are `RATE_LIMITED` and
+   rule-based.
+6. **Retention.** Stored explanations and automatic entries are kept, and no job deletes them. Manual entries are
+   deleted only by their owner.
