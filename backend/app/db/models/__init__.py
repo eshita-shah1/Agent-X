@@ -24,6 +24,7 @@ from app.db.models.ingestion import (
     ProviderCapability,
     ProviderHealthState,
 )
+from app.db.models.journal import JournalEntry, JournalEntryTag, JournalReflection, JournalTag, TradeExplanation
 from app.db.models.market import AdjustedCandle, Candle, CorporateAction, DataProvider, Instrument
 from app.db.models.trading import (
     CashLedgerEntry,
@@ -67,6 +68,10 @@ __all__ = [
     "ExchangeCalendarDay",
     "Fill",
     "Instrument",
+    "JournalEntry",
+    "JournalEntryTag",
+    "JournalReflection",
+    "JournalTag",
     "InstrumentProviderSymbol",
     "Order",
     "Position",
@@ -76,6 +81,7 @@ __all__ = [
     "RiskDecision",
     "RiskSettings",
     "RiskState",
+    "TradeExplanation",
     "User",
     "VirtualAccount",
 ]

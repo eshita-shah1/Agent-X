@@ -1,0 +1,81 @@
+Agent-X development database migration 0012 -> 0013 (2026-11-12, Windows integration machine)
+Target confirmed: DB_NAME=agentx (differs from DB_TEST_NAME=agentx_test); PostgreSQL 18.6; EXECUTION_MODE=disabled and
+LLM_PROVIDER=disabled before and after. agentx_test and agentx_staging were not migrated or altered (agentx_test was read
+only, already at 0013). Code: branch phase-6-journal-explanations @ 49eeece (six Phase 6 commits on main @ 60206bd).
+
+== Backup (pg_dump -Fc, full database; git-ignored, not committed)
+file: data/backups/agentx_pre_0013_20261112T070218.dump (2,096,507 bytes)
+sha256: 3731bea5c2f282e00dc782e0664eeec5d1b1e19ed56f1df556ba4306c5d0ed06 (re-read and recomputed: identical)
+pg_restore --list: 485 TOC entries, 39 TABLE DATA entries; includes alembic_version, users, virtual_accounts, orders, fills, positions, cash_ledger, risk_settings, risk_state, candles, corporate_actions, audit_events, agent_decisions
+Rollback: restore this dump (pg_restore --clean -d agentx). Downgrade 0013 is refused once journal or explanation rows exist.
+
+== Alembic
+upgrade: Running upgrade 0012 -> 0013 (journal and explanations), with an explicit target (alembic upgrade 0013)
+current: 0013 (head)
+alembic check: No new upgrade operations detected. (Its SAWarning "Can't validate argument 'dialect_options'" is the known,
+pre-existing warning for migration 0008's NOT VALID constraints; unrelated to 0013.)
+
+== Existing data: rows and md5 of every row (ordered by id), before / after migration / after smoke tests
+taken 2026-11-12T01:32:10+00:00 (pre) and 2026-11-12T01:34:30+00:00 (post-smoke)
+table                          |   rows | md5 (pre)                        | result
+users                          |      6 | 0c3f5fae005aff081f573631f158bb1f | unchanged
+virtual_accounts               |      6 | 9c7eeb2f542e11017e8ba5a0d12d7430 | unchanged
+audit_events                   |     20 | a61ea6a7156a59ac3ed5118551e26c3e | unchanged
+orders                         |      6 | 4caad7dc6330c40fbd262388da7de771 | unchanged
+fills                          |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+positions                      |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+cash_ledger                    |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+risk_settings                  |      1 | bc11051576f7907229b6977e034aaaf2 | unchanged
+risk_state                     |      2 | cd0c2f42db5cf2987d295ba7a83ede07 | unchanged
+risk_decisions                 |      6 | 4ad6772ff0e27c015edd1ef420f19cd4 | unchanged
+protective_exit_requirements   |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+corporate_action_adjustments   |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+dividend_credits               |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+instruments                    |     12 | 0ad21646d35c6e7620562a9543364f53 | unchanged
+candles                        |  28587 | 26c2f8624350404ec74f4344d777a259 | unchanged
+adjusted_candles               |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+corporate_actions              |    410 | d2ea4e9269e8394e3d7b7fae7d887846 | unchanged
+data_providers                 |      1 | 95719ae1993b9cb07390706237d93190 | unchanged
+data_ingestion_jobs            |      3 | c457df231cad182f9f28a6539ba62579 | unchanged
+data_ingestion_batches         |     30 | 3e65dacbac60fead5ba3388c5482bc92 | unchanged
+backtest_runs                  |      3 | dd9c9788354ada496d62cab37051c7d5 | unchanged
+agent_instances                |      1 | f98c07c7754fb953bcfdb698741c7e35 | unchanged
+agent_config_versions          |      1 | 60b983972cd89199a3b22beec5494f99 | unchanged
+agent_cycles                   |      1 | 38bcfa5a5ed3ef00b1b31ba743faa8b3 | unchanged
+agent_decisions                |      0 | d41d8cd98f00b204e9800998ecf8427e | unchanged
+agent_events                   |      5 | 04bfbf78185341da1f3e8cd80c7e212f | unchanged
+agent_instrument_states        |     10 | fed1f5356812ba241262d22fd0e61d5b | unchanged
+Result: all 27 existing tables identical before migration, after migration and after the smoke tests.
+(orders md5 4caad7dc... and risk_settings md5 bc110515... also equal the values recorded at migration 0012.)
+
+== New schema (0013)
+tables (rows): journal_entries (0), journal_tags (0), journal_entry_tags (0), journal_reflections (0), trade_explanations (0)
+user_id NOT NULL with FK to users: journal_entries, journal_tags, journal_entry_tags, journal_reflections, trade_explanations
+triggers (6): journal_entries.trg_journal_entries_guard, journal_entries.trg_journal_entries_owner, journal_entry_tags.trg_journal_entry_tags_owner, journal_reflections.trg_journal_reflections_owner, trade_explanations.trg_trade_explanations_append_only, trade_explanations.trg_trade_explanations_owner
+trigger functions (5): journal_child_owner_guard, journal_entries_guard, journal_entries_owner_guard, trade_explanations_append_only, trade_explanations_owner_guard
+indexes (21); unique (9): pk_journal_entries, pk_journal_entry_tags, pk_journal_reflections, pk_journal_tags, pk_trade_explanations, uq_journal_entries_source_key, uq_journal_reflections_entry_id, uq_journal_tags_user_name, uq_trade_explanations_subject_facts
+foreign keys: 19; check constraints: 12
+journal_entries.search_vector: generated stored column ('s'), GIN index ix_journal_entries_search
+extensions: plpgsql (no new extension)
+
+== Tests (2026-11-12)
+Non-database Phase 6 and boundary tests (tests/phase6, tests/unit/test_llm_narrator.py, tests/agent/test_boundaries.py,
+tests/marketdata/test_phase2_policies.py): 72 passed, 1 warning (pre-existing httpx TestClient deprecation).
+Phase 6 PostgreSQL integration tests, run afterwards on agentx_test with the owner's separate approval (they truncate it;
+the round trip downgrades it to base and back): tests/integration/test_phase6_records.py, test_phase6_api.py,
+test_platform.py (migration round trip 0001 -> 0013 -> base -> head, no model drift), test_isolation.py, tests/phase6,
+tests/unit/test_llm_narrator.py: 109 passed, 0 failed, 1 warning (pre-existing httpx deprecation), 3m24s.
+Afterwards: agentx at 0013, agentx_test at 0013.
+
+== Development API smoke tests (uvicorn --factory app.main:build_app on 127.0.0.1:8012, database agentx; stopped afterwards)
+Read-only GET requests only; token issued for the existing verification account agent-signals-check@example.com
+(no login, so no audit event written).
+/health ok; /health/ready ready; /journal, /explanations/provider, /journal/analytics without a token: 401.
+/auth/me 200; /explanations/provider 200 (enabled false, provider disabled, fallback rule_based, 0/30 LLM calls);
+/journal/overview 200 (0 entries); /journal 200 (total 0); /journal/tags 200 ([]); /journal?q=breakout 200 (0);
+/explanations/daily-summary?session_date=2026-11-12 200 (0 signals, 0 orders, 0 closed trades, net 0; live preview, not
+stored; layers Signals, Orders, Trades, Realized P&L, Unrealized, Agent events); /journal/analytics 200 (0 closed, 6
+caveats); /explanations 200 (0); /journal/999999 404; /explanations/decisions/999999 404;
+/agent/status 200 (STOPPED, mode none, execution disabled); /exchange/status 200 (execution_mode disabled).
+Note: the agent is STOPPED (it was RUNNING SIGNALS_ONLY at migration 0012); agent rows were unchanged by this migration.
+No journal sync, explanation generation or other write was performed on agentx. Execution stayed disabled.

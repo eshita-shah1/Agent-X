@@ -1,4 +1,4 @@
-# Agent-X Backend — API (Phases 1-5)
+# Agent-X Backend — API (Phases 1-6)
 
 Base path `/api/v1`. Interactive docs at `/docs` (OpenAPI at `/openapi.json`).
 Authenticated endpoints need `Authorization: Bearer <access_token>`.
@@ -248,10 +248,61 @@ account lock, are recorded as agent events and return the **persisted** status r
                 {"config_id": "rsi", "strategy_id": "RSI_BOLLINGER", "params": {}, "priority": 2}]}
 ```
 
+## Phase 6: explanations and journal (design in [PHASE6.md](PHASE6.md))
+
+Paper trading only. These routes read the caller's own records and write only journal rows and stored explanations; no
+route here can place, change or cancel an order, change risk settings or change the agent. Another user's record is
+always `404`. A link to another user's record is refused exactly like a missing one (`422 LINK_NOT_FOUND`).
+
+### Explanations (`/api/v1/explanations`)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/explanations/provider` | Narrator status: `enabled`, `provider`, `model`, `configuration_problems`, `includes_journal_notes`, `fallback` (`rule_based`), `llm_calls_last_hour`, `llm_hourly_budget`. Never returns a key |
+| GET | `/explanations/decisions/{decision_id}` | Live preview of an agent decision (not stored, no LLM) |
+| GET | `/explanations/orders/{order_id}` | Live preview of an order (risk decision, fills, fees, trade outcome, position now) |
+| GET | `/explanations/events/{event_id}` | Live preview of an agent event |
+| GET | `/explanations/daily-summary?session_date=YYYY-MM-DD` | Live session summary (default: today IST). Realized P&L from `daily_pnl`; unrealized P&L is never included |
+| POST | `/explanations/generate` | Body `{"subject_type": "AGENT_DECISION"\|"ORDER"\|"AGENT_EVENT"\|"DAILY_SUMMARY", "subject_id": "...", "narrative": true}`. Stores the explanation (and an LLM narrative if a provider is usable): `201`; the same facts and narrator return the stored row with `200`. `404` for an unknown or foreign subject |
+| GET | `/explanations?subject_type&subject_key&before_id&limit` | Stored explanations, newest first, `limit` ≤ 100 |
+| GET | `/explanations/{id}` | One stored explanation |
+
+Every explanation response contains:
+- `verified_facts`: copied from stored records;
+- `evidence`: the ids of every record used (candle, observation version, configuration version, decision, order, risk
+  decision, fills, events, provider and price basis);
+- `facts_fingerprint`;
+- `deterministic`: the rule-based `text` and its `sections` (`layer` + `text`: Selection, Strategy signal, Market data,
+  Agent decision, Risk decision, Order, Execution, Outcome, ...);
+- `narrative`: `null` for previews. Otherwise it has `status` (GENERATED / DISABLED / FAILED / INVALID_OUTPUT /
+  RATE_LIMITED / NOT_REQUESTED), `text`, `caveats`, `provider`, `model`, `error`, `latency_ms` and a fixed `label`
+  stating that it is an AI interpretation, not a verified fact and not advice.
+
+### Journal (`/api/v1/journal`)
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/journal/sync` | Body `{"date_from", "date_to"}` (optional; default the last 30 days, at most 366). Creates the missing automatic entries from orders, fills, agent decisions and events; idempotent. Returns `candidates`, `created`, `created_by_event` |
+| GET | `/journal` | Search and filters: `q` (full text over title and notes), `instrument_id`, `strategy_id`, `date_from`, `date_to` (session date), `outcome`, `tag` (repeatable, all must match), `entry_type` (AUTO/MANUAL), `source_event`, `order_id`, `position_id`, `has_reflection`, `sort` (occurred_at/created_at/updated_at/relevance), `direction`, `limit` ≤ 100, `offset` ≤ 10 000. Returns `{items, total, limit, offset}` |
+| POST | `/journal` | Manual entry: `title` (required) plus optional `occurred_at`, links (`instrument_id`, `strategy_id`, `order_id`, `fill_id`, `position_id`, `agent_decision_id`, `agent_event_id`, `config_version_id`, `backtest_run_id`), the note fields, `rating`/`confidence` (1–5) and `tags` (≤ 20). `201` with the detail |
+| GET | `/journal/{id}` | Detail: the entry, `tags`, `reflection`, `reflection_allowed`, and `linked` (order, fills, position, trade outcome and amounts, agent decision) read live from the authoritative tables |
+| PATCH | `/journal/{id}` | Only the fields sent change. On an AUTO entry only notes, rating, confidence and tags may change (`409 AUTO_ENTRY_FACTS_IMMUTABLE` otherwise) |
+| DELETE | `/journal/{id}` | Manual entries only (`204`; their tags and reflection go too). AUTO entries: `409 AUTO_ENTRY_NOT_DELETABLE` |
+| POST | `/journal/{id}/reflection` | Create (`201`) or replace (`200`) the reflection: `original_thesis`, `followed_strategy_rules`, `risk_limits_respected`, `exit_followed_strategy` (true/false/null), `mistakes`, `lessons`, `future_improvements`. Needs an entry linked to a closed trade (`409 TRADE_NOT_CLOSED`) |
+| POST | `/journal/{id}/reflection/assist?narrative=true` | Deterministic reflection questions and an optional LLM draft summary; **nothing is saved** (`saved: false`) |
+| GET | `/journal/overview` | Counts: total, manual, automatic, reflections, latest entry time |
+| GET | `/journal/tags` | The user's tags with entry counts |
+| GET | `/journal/analytics?date_from&date_to` | Deterministic analytics with sample sizes and caveats, plus the rule-based text |
+| POST | `/journal/analytics/narrative` | Stores an optional LLM narrative of the analytics (subject `JOURNAL_INSIGHTS`) |
+
+Text fields are at most 10 000 characters, titles at most 200, tags at most 40 characters (normalised to lower case).
+Unknown body fields, including any `user_id`, are refused with `422`.
+
 ## Errors
 Errors use FastAPI's default `{"detail": ...}` shape; some errors carry a structured detail `{"code": ..., "message":
 ...}`: market data (`INSTRUMENT_DISABLED`, `INGESTION_ALREADY_RUNNING`, `NO_INGESTABLE_INSTRUMENTS`,
 `PROVIDER_NOT_CONFIGURED`) and backtests (see above). `401` responses carry `WWW-Authenticate: Bearer`.
 
 ## Not yet available
-The LLM journal, explanations and reports arrive in Phase 7.
+Refresh tokens, general rate limiting and hosted-deployment hardening (Phase 8). Real-money or broker execution will
+never be added.

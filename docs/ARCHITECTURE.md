@@ -1,12 +1,13 @@
-# Agent-X Backend — Architecture (Phases 1-5)
+# Agent-X Backend — Architecture (Phases 1-6)
 
 Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 is the foundation (auth,
 isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)); Phase 3 adds
 indicators, strategies, regime-based selection, the backtesting engine and the Buy-and-Hold benchmark (see
 [BACKTESTING.md](BACKTESTING.md)); Phase 4 adds the risk engine, the Mock Exchange, simulation-only execution, cost
 schedules, corporate-action adjustments, dividends and the operator role (see [PHASE4.md](PHASE4.md)); Phase 5 adds the
-autonomous paper-trading agent that orchestrates them (see [PHASE5.md](PHASE5.md)). Live trading, broker integration
-and LLM features are **not implemented**.
+autonomous paper-trading agent that orchestrates them (see [PHASE5.md](PHASE5.md)); Phase 6 adds explanations, an
+optional LLM narrator and the trading journal, all read-only towards trading (see [PHASE6.md](PHASE6.md)). Live trading
+and broker integration are **not implemented** and will not be added.
 
 ## Layout
 
@@ -29,8 +30,12 @@ backend/
     backtest/          pure backtesting engine: fills, costs, accounting, benchmark, fingerprints (no DB)
     backtest_runs/     read-only data loader, background runs, atomic persistence
     exchange/, risk/, orders/, ops/   Phase 4 (see below)
-    api/v1/            auth, account, market, trading, operator, backtests routers; deps; schemas
-  alembic/             migrations 0001-0012 (see "Migration chain")
+    agent/             Phase 5 (see below)
+    explanations/      Phase 6: read-only facts, trade episodes, rule-based text, explanation service
+    llm/               Phase 6: optional, provider-neutral narrator (no database, no services)
+    journal/           Phase 6: journal service, automatic-entry sync, reflections, analytics
+    api/v1/            auth, account, market, trading, operator, backtests, agent, explanations, journal routers; deps; schemas
+  alembic/             migrations 0001-0013 (see "Migration chain")
   tests/               unit/, marketdata/, indicators/, strategies/, backtest/ (pure, no DB),
                        integration/ (real PostgreSQL); support.py (fake provider/clock)
 ```
@@ -121,7 +126,7 @@ Summary of what changed in the foundation:
 
 ## Migration chain
 
-One linear chain with a single head (`alembic heads` → `0012`):
+One linear chain with a single head (`alembic heads` → `0013`):
 
 | Revision | Purpose | Phase |
 |---|---|---|
@@ -137,6 +142,7 @@ One linear chain with a single head (`alembic heads` → `0012`):
 | `0010` | Execution approval reference on orders and fills | 4 |
 | `0011` | Protective-exit requirements (stale prices) | 4 |
 | `0012` | Agent orchestration: instances, configuration versions, cycles, decisions, events, instrument state | 5 |
+| `0013` | Journal entries, tags, reflections, stored trade explanations | 6 |
 
 Phases 3 and 4 were developed in parallel, and Phase 4 reached `main` first. The Phase 3 migration was written as `0004`
 and renumbered to `0009` (parent `0008`) at integration. Its schema is unchanged, and `0001`-`0008` are unchanged.
@@ -194,6 +200,33 @@ Full design: [PHASE5.md](PHASE5.md).
   execution-readiness check used by `GET /exchange/status` and by the agent's mode decision.
 - **No in-app scheduling.** The worker is a one-shot CLI run by an external scheduler; the Phase 2 guard against threads
   and schedulers still applies to every module.
+
+## Phase 6: explanations and trading journal
+
+Full design: [PHASE6.md](PHASE6.md).
+
+- **Read-only towards trading.** `app/explanations` builds layered facts from stored records:
+  - strategy signal, agent decision, risk decision, order, execution and outcome, kept separate;
+  - trade episodes from fills;
+  - money from `daily_pnl` and `PortfolioReader`.
+
+  `app/journal` derives automatic entries from those rows (idempotent sync; no new event pipeline) and stores the
+  user's notes and reflections. They write only the five Phase 6 tables (migration `0013`), plus `audit_events` for
+  unstored reflection drafts.
+- **The LLM explains, it never decides.** `app/llm` sees only settings and enums: no session and no services. A
+  narrative is a validated rewording of the facts (every number must occur in them; no instructions, URLs or labels).
+  Any failure falls back to the rule-based text. `LLM_PROVIDER=disabled` by default, and no LLM package is a
+  dependency (the Anthropic SDK is an optional install).
+- **Dependency direction.**
+  - No package below the API imports Phase 6.
+  - Phase 6 imports no order pipeline, Mock Exchange service, risk engine or risk service, agent, backtest runner,
+    provider, scheduler, thread or broker code.
+  - The Phase 6 routers do not import the trading or agent routers.
+  - `tests/phase6/test_boundaries.py` enforces all three.
+- **Isolation.** All five tables are user-owned, and triggers require every linked record and tag to belong to the
+  row's user.
+  - Automatic entries are immutable apart from notes, and are never deleted.
+  - Explanations are append-only.
 
 ## What is deliberately not here
 

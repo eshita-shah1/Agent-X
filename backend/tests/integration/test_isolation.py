@@ -115,6 +115,9 @@ USER_OWNED_TABLES = {
     # Phase 5 agent (migration 0012): an insert trigger requires every row to carry its agent's owner
     "agent_instances", "agent_config_versions", "agent_cycles", "agent_decisions", "agent_events",
     "agent_instrument_states",
+    # Phase 6 journal and explanations (migration 0013): triggers require every linked record and tag to share the
+    # row's owner
+    "journal_entries", "journal_tags", "journal_entry_tags", "journal_reflections", "trade_explanations",
 }
 
 

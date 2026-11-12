@@ -95,6 +95,43 @@ class Settings(BaseSettings):
     # Setting it enables partial fills.
     exchange_max_volume_participation: Decimal | None = Field(default=None, gt=0, le=1)
 
+    # ---- Phase 6: optional LLM narratives (explanations and journal insights) ----------------------------------
+    # Disabled by default: every explanation is then the deterministic, rule-based text built from stored records. An
+    # LLM only rewords those verified facts as a narrative; it never decides, sizes, submits or changes anything, and a
+    # failure, timeout or invalid answer falls back to the rule-based text. No provider is mandatory:
+    #   openai_compatible - any OpenAI-compatible /chat/completions server (e.g. a local Ollama or LM Studio, which need
+    #                       no API key and no paid account); LLM_BASE_URL and LLM_MODEL are required;
+    #   anthropic         - the Claude API through the official `anthropic` SDK (optional install; LLM_API_KEY required;
+    #                       LLM_MODEL defaults to claude-opus-5-5).
+    llm_provider: Literal["disabled", "openai_compatible", "anthropic"] = "disabled"
+    llm_model: str | None = Field(default=None, max_length=128)
+    llm_base_url: str | None = Field(default=None, max_length=500)
+    llm_api_key: SecretStr | None = None
+    llm_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    llm_max_retries: int = Field(default=1, ge=0, le=3)  # retries of timeouts, 429 and 5xx only
+    llm_max_output_tokens: int = Field(default=4000, ge=256, le=16000)
+    # Per-user budget of LLM calls per rolling hour (0 = no LLM call at all); beyond it explanations are rule-based.
+    llm_max_requests_per_user_per_hour: int = Field(default=30, ge=0, le=1000)
+    # Journal notes are the user's private text: sent to a provider only when explicitly enabled.
+    llm_include_journal_notes: bool = False
+
+    def llm_config_problems(self) -> list[str]:
+        """Why the configured LLM provider cannot be used (empty when disabled or usable). Never fatal: a misconfigured
+        provider is reported and explanations stay rule-based, so the application always starts."""
+        if self.llm_provider == "disabled":
+            return []
+        problems = []
+        if self.llm_provider == "openai_compatible":
+            if not self.llm_model:
+                problems.append("LLM_MODEL is required for the openai_compatible provider")
+            if not self.llm_base_url:
+                problems.append("LLM_BASE_URL is required for the openai_compatible provider")
+        if self.llm_provider == "anthropic" and not (self.llm_api_key and self.llm_api_key.get_secret_value().strip()):
+            problems.append("LLM_API_KEY is required for the anthropic provider")
+        if self.llm_base_url and not self.llm_base_url.startswith(("http://", "https://")):
+            problems.append("LLM_BASE_URL must be an http(s) URL")
+        return problems
+
     def execution_config_problems(self, on_date: "date | None" = None) -> list[str]:
         """Safeguards for enabling execution. Empty when execution is disabled or correctly configured.
 
