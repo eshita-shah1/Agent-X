@@ -160,3 +160,13 @@ See [OPERATIONS.md](OPERATIONS.md). Summary:
 No configuration is needed: `LLM_PROVIDER=disabled` (the default) gives rule-based explanations. To add an optional LLM
 narrative, see `.env.example` (`LLM_*`) and [PHASE6.md](PHASE6.md) §9: a local OpenAI-compatible server (e.g. Ollama;
 free, no key) or Claude (`pip install anthropic` and an `LLM_API_KEY`). Migration `0013` adds the journal tables.
+
+## Production images and hardening (Phase 8)
+
+- Images: `docker build -t agentx-backend backend` and `docker build -t agentx-web frontend` (multi-stage, non-root).
+  Provider-neutral composition: `docker-compose.prod.yml`. Guide: [DEPLOYMENT.md](DEPLOYMENT.md).
+- Lint: `ruff check .` (from `backend/`, correctness rules) and `npm run lint` (from `frontend/`). CI:
+  `.github/workflows/ci.yml`.
+- Backups and the isolated restore check: [BACKUP_RESTORE.md](BACKUP_RESTORE.md). Health probe:
+  `python -m app.monitoring.cli health`.
+- Migration `0014` (logout and the login-lockout index) must be applied after `0013`.
