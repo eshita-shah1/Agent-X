@@ -5,7 +5,7 @@ execution enabled only in these tests). Nothing here asserts that live or end-to
 """
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -18,7 +18,6 @@ from app.db.enums import (
     JournalSourceEvent as S,
     NarrativeStatus,
     OrderStatus,
-    OrderType,
     TradeOutcome,
 )
 from app.db.models import (
@@ -40,7 +39,7 @@ from app.explanations.trades import episodes
 from app.journal import sync as journal_sync
 from app.journal.service import JournalError, JournalService
 from app.llm.narrator import Narrator, ungrounded_numbers
-from tests.integration.agent_support import DAY, World, ist
+from tests.integration.agent_support import DAY, World
 from tests.integration.phase6_support import FakeProvider, entry_decision, orders, round_trip
 from tests.integration.trading_support import (
     Clock,

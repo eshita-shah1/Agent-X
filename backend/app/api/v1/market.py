@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import get_current_user, get_db, get_settings_dep
+from app.api.v1.operator import require_operator
 from app.api.v1.schemas_market import (
     BackfillRequest,
     CandleOut,
@@ -191,9 +192,18 @@ def _start_job(
     return _job_out(job)
 
 
+def ingestion_user(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db),
+                   settings: Settings = Depends(get_settings_dep)) -> User:
+    """Who may start ingestion: any authenticated user in development/test (the approved Phase 2 local policy), an
+    operator in staging/production (Phase 8; INGESTION_REQUIRES_OPERATOR overrides). Refusals are audited."""
+    if settings.ingestion_operator_only:
+        return require_operator(request, user, db)
+    return user
+
+
 @router.post("/ingestion/backfill", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
 def start_backfill(
-    body: BackfillRequest, request: Request, background: BackgroundTasks, user: User = Depends(get_current_user),
+    body: BackfillRequest, request: Request, background: BackgroundTasks, user: User = Depends(ingestion_user),
     svc: MarketDataService = Depends(get_service), settings: Settings = Depends(get_settings_dep),
 ):
     return _start_job(JobType.BACKFILL, body.instrument_ids, body.days, user, background, request, svc, settings)
@@ -201,7 +211,7 @@ def start_backfill(
 
 @router.post("/ingestion/incremental", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
 def start_incremental(
-    body: IncrementalRequest, request: Request, background: BackgroundTasks, user: User = Depends(get_current_user),
+    body: IncrementalRequest, request: Request, background: BackgroundTasks, user: User = Depends(ingestion_user),
     svc: MarketDataService = Depends(get_service), settings: Settings = Depends(get_settings_dep),
 ):
     return _start_job(JobType.INCREMENTAL, body.instrument_ids, 60, user, background, request, svc, settings)

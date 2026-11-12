@@ -1,0 +1,89 @@
+# Agent-X provider-neutral production composition (Phase 8). Nothing here is deployed automatically: see
+# docs/DEPLOYMENT.md. Configuration comes from a git-ignored .env.production (ENVIRONMENT=production makes the API refuse
+# to start with weak secrets, a test/staging database, docs enabled, wildcard CORS or open ingestion).
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production build
+#   docker compose -f docker-compose.prod.yml --env-file .env.production run --rm backup     # before every upgrade
+#   AGENTX_MIGRATION_TARGET=<db> docker compose -f docker-compose.prod.yml --env-file .env.production run --rm migrate
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d api web
+#
+# PostgreSQL: by default an external, managed or separately operated server (DB_HOST). For a single host, the optional
+# `db` service (profile bundled-db) runs PostgreSQL 18 with a named volume. Execution stays disabled unless the owner
+# configures it (D15); this file never sets EXECUTION_MODE.
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "5"}
+
+services:
+  api:
+    <<: *hardened
+    build: ./backend
+    image: agentx-backend:${AGENTX_VERSION:-local}
+    env_file: .env.production
+    environment:
+      ENVIRONMENT: production
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.16.0.0/12}
+    expose: ["8000"]                 # reachable only by the web proxy on the internal network
+    stop_grace_period: 30s
+
+  web:
+    <<: *hardened
+    build: ./frontend
+    image: agentx-web:${AGENTX_VERSION:-local}
+    depends_on:
+      api: {condition: service_healthy}
+    tmpfs: ["/tmp", "/var/cache/nginx", "/var/run"]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"   # put the TLS-terminating proxy in front; never expose plain HTTP publicly
+
+  # One-shot tools (profile "tools"); never part of `up`.
+  migrate:
+    image: agentx-backend:${AGENTX_VERSION:-local}
+    env_file: .env.production
+    environment:
+      ENVIRONMENT: production
+      AGENTX_MIGRATION_TARGET: ${AGENTX_MIGRATION_TARGET:-}   # must equal DB_NAME, or alembic refuses
+    command: ["alembic", "upgrade", "head"]
+    profiles: ["tools"]
+
+  backup:
+    image: agentx-backend:${AGENTX_VERSION:-local}
+    env_file: .env.production
+    environment:
+      ENVIRONMENT: production
+    command: ["python", "-m", "app.ops.cli", "backup", "--dir", "/backups"]
+    volumes: ["${BACKUP_DIR:-./backups}:/backups"]
+    profiles: ["tools"]
+
+  health:
+    image: agentx-backend:${AGENTX_VERSION:-local}
+    env_file: .env.production
+    environment:
+      ENVIRONMENT: production
+    command: ["python", "-m", "app.monitoring.cli", "health"]
+    profiles: ["tools"]
+
+  # Optional single-host PostgreSQL (profile bundled-db). Set DB_HOST=db when you use it.
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:?set DB_NAME}
+      POSTGRES_USER: ${DB_USER:?set DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+    volumes: ["agentx_pgdata:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      retries: 5
+    profiles: ["bundled-db"]
+
+volumes:
+  agentx_pgdata:

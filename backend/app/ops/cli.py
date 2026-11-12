@@ -184,7 +184,45 @@ def main(argv: list[str] | None = None) -> int:
     lc.add_argument("--staging-db", required=True)
     lc.add_argument("--schedule", type=Path, required=True)
     lc.add_argument("--approval-reference", required=True)
+    default_dir = Path(__file__).resolve().parents[3] / "data" / "backups"
+    bk = sub.add_parser("backup", help="pg_dump -Fc of DB_NAME + manifest (sha256, TOC, row counts and checksums)")
+    bk.add_argument("--dir", type=Path, default=default_dir)
+    bk.add_argument("--label", default="")
+    vb = sub.add_parser("verify-backup", help="re-check a backup's SHA-256 and table of contents against its manifest")
+    vb.add_argument("dump", type=Path)
+    rc = sub.add_parser("restore-check", help="restore a verified backup into a disposable *_restore_check database and compare")
+    rc.add_argument("dump", type=Path)
+    rc.add_argument("--target", required=True)
+    pr = sub.add_parser("prune-backups", help="retention: keep the newest N and any younger than D days (dry run by default)")
+    pr.add_argument("--dir", type=Path, default=default_dir)
+    pr.add_argument("--keep-last", type=int, default=14)
+    pr.add_argument("--keep-days", type=int, default=30)
+    pr.add_argument("--apply", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.cmd in ("backup", "verify-backup", "restore-check", "prune-backups"):
+        from app.ops import backup
+
+        try:
+            if args.cmd == "backup":
+                m = backup.create_backup(get_settings(), args.dir, args.label)
+                print(json.dumps({k: v for k, v in m.items() if k != "snapshot"} | {"tables_snapshotted": len(m["snapshot"])}, indent=2))
+                return 0
+            if args.cmd == "verify-backup":
+                r = backup.verify_backup(args.dump)
+                print(json.dumps({k: v for k, v in r.items() if k != "tables_with_data"}, indent=2))
+                return 0 if r["ok"] else 1
+            if args.cmd == "restore-check":
+                r = backup.restore_check(get_settings(), args.dump, args.target)
+                print(json.dumps({"ok": r.ok, "target": r.target, "alembic_version": r.alembic_version,
+                                  "expected_alembic_version": r.expected_alembic_version,
+                                  "tables_compared": r.tables_compared, "mismatches": r.mismatches}, indent=2))
+                return 0 if r.ok else 1
+            print(json.dumps(backup.prune(args.dir, args.keep_last, args.keep_days, args.apply), indent=2))
+            return 0
+        except backup.BackupError as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
 
     if args.cmd == "daily":
         settings, factory, registry = _ctx()

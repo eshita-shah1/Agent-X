@@ -33,7 +33,17 @@ npm run build     # type-check (tsc -b) and production build into frontend/dist 
 npm run preview   # serve the production build
 ```
 
-The `lint` script (`tsc --noEmit`) checks nothing as configured, because the root `tsconfig.json` has `files: []` and only references the app and node configs. The real type-check is `tsc -b`, which runs inside `npm run build`. There is no frontend test suite or ESLint config yet.
+`npm run lint` type-checks the app and node configurations (`tsc -p tsconfig.app.json --noEmit`, Phase 8; it previously
+checked nothing). `npm run build` also type-checks. There is no frontend unit-test suite or ESLint config yet. CI runs
+lint and build on every change.
+
+**Phase 8 production delivery:**
+- Pages are lazy-loaded per route (`React.lazy`), which cut the JavaScript each page downloads by 31–64 %
+  ([PHASE8.md](PHASE8.md) §4).
+- `frontend/Dockerfile` builds the UI and serves it with unprivileged nginx (`nginx.conf`). nginx proxies `/api` and
+  `/health` to the API (same origin, no CORS) and adds the UI's CSP and security headers.
+- nginx rate-limits login and the API, caps bodies at 1 MB, and caches hashed assets immutably.
+- The CSP allows Google Fonts (used by `index.html`). Self-hosting the two fonts would remove that third-party request.
 
 ## Connecting to the backend
 

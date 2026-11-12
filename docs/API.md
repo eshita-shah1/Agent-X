@@ -1,4 +1,4 @@
-# Agent-X Backend — API (Phases 1-6)
+# Agent-X Backend — API (Phases 1-8)
 
 Base path `/api/v1`. Interactive docs at `/docs` (OpenAPI at `/openapi.json`).
 Authenticated endpoints need `Authorization: Bearer <access_token>`.
@@ -297,6 +297,22 @@ Every explanation response contains:
 
 Text fields are at most 10 000 characters, titles at most 200, tags at most 40 characters (normalised to lower case).
 Unknown body fields, including any `user_id`, are refused with `422`.
+
+## Phase 8: sessions, status and hardening (details in [SECURITY.md](SECURITY.md), [MONITORING.md](MONITORING.md))
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/auth/logout` | `204`. Ends **every** session of the user: tokens issued up to now are refused from then on (migration `0014`) |
+| POST | `/auth/login` | Now `429` with `Retry-After` after `LOGIN_MAX_FAILURES` failed logins for the email within `LOGIN_FAILURE_WINDOW_MINUTES` (whether or not the account exists) |
+| GET | `/system/status` | Authenticated. `overall`, `readiness` (database, migration current/expected/compatible) and `reported` (execution, market data per provider, optional LLM, the caller's agent). Execution disabled and LLM problems never make it fail |
+| GET | `/system/agents` | Operator only. Every agent's status, heartbeat, last successful cycle, cycles in 24 h by status, consecutive failures, `worker_stale`, `attention` |
+| POST | `/market/ingestion/backfill`, `/market/ingestion/incremental` | Operator only in staging and production (`403` otherwise, audited). Any authenticated user in development and test |
+| GET | `/health/ready` | `503` also when the database schema is not at this code's migration head |
+
+Every response carries `X-Request-ID` (a safe client-supplied value is kept) and security headers. API responses are
+`Cache-Control: no-store`. Request bodies over `MAX_REQUEST_BODY_BYTES` get `413`. Unhandled errors return
+`500 {"detail": "Internal server error", "request_id": ...}`, and the request id finds the logged traceback. `/docs`,
+`/redoc` and `/openapi.json` are disabled in staging and production.
 
 ## Errors
 Errors use FastAPI's default `{"detail": ...}` shape; some errors carry a structured detail `{"code": ..., "message":

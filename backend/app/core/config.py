@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     # by configuration.
     _staging_validator_process: bool = PrivateAttr(default=False)
 
-    environment: str = "development"
+    # development | test | staging | production. production enforces the hosted-deployment rules in
+    # production_config_problems() at start-up (Phase 8); the other values keep the local defaults.
+    environment: Literal["development", "test", "staging", "production"] = "development"
 
     db_host: str
     db_port: int
@@ -185,11 +187,72 @@ class Settings(BaseSettings):
             and (self.execution_approval_reference or "").startswith("STAGING-ONLY:")
         )
 
+    # ---- Phase 8: HTTP hardening and deployment safety -----------------------------------------------------------
+    # Explicit CORS allow-list (JSON list of origins). Empty: no CORS middleware (same-origin via a reverse proxy).
+    cors_allow_origins: list[str] = Field(default_factory=list)
+    # Interactive API docs (/docs, /redoc, /openapi.json). None: on in development/test, off in staging/production.
+    enable_api_docs: bool | None = None
+    # Requests whose declared body is larger are refused with 413 before they are read (the proxy should also cap it).
+    max_request_body_bytes: int = Field(default=1_048_576, ge=1024, le=50_000_000)
+    # Brute-force protection: this many failed logins for one email within the window -> 429 until the window passes.
+    # Counted from the existing audit_events (no in-memory state, so it holds across processes and restarts).
+    login_max_failures: int = Field(default=5, ge=1, le=100)
+    login_failure_window_minutes: int = Field(default=15, ge=1, le=1440)
+    # Market-data ingestion via the API. None: open to any authenticated user in development/test (the approved
+    # Phase 2 local policy), operator-only in staging/production.
+    ingestion_requires_operator: bool | None = None
+    # Trust X-Forwarded-For/-Proto only from these proxy addresses (uvicorn --forwarded-allow-ips; documented).
+    trusted_proxy_ips: str = "127.0.0.1"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.enable_api_docs is not None:
+            return self.enable_api_docs
+        return self.environment in ("development", "test")
+
+    @property
+    def ingestion_operator_only(self) -> bool:
+        if self.ingestion_requires_operator is not None:
+            return self.ingestion_requires_operator
+        return self.environment in ("staging", "production")
+
+    def production_config_problems(self) -> list[str]:
+        """Rules a hosted (production) deployment must satisfy; checked at start-up and fatal there. Values are never
+        echoed, only which setting is wrong."""
+        if not self.is_production:
+            return []
+        problems = []
+        secret = self.jwt_secret_key.get_secret_value()
+        if len(secret) < 48 or "change-me" in secret.lower() or len(set(secret)) < 16:
+            problems.append("JWT_SECRET_KEY must be a random value of at least 48 characters in production")
+        if len(self.db_password.get_secret_value()) < 16:
+            problems.append("DB_PASSWORD must be at least 16 characters in production")
+        if self.db_name == self.db_test_name or self.db_name.endswith(("_test", "_staging", "_restore_check")):
+            problems.append("DB_NAME must be the production database, not a test, staging or restore-check database")
+        if self.access_token_expire_minutes > 60:
+            problems.append("ACCESS_TOKEN_EXPIRE_MINUTES must be at most 60 in production")
+        if self.enable_api_docs:
+            problems.append("ENABLE_API_DOCS must not be true in production")
+        if any(o == "*" or not o.startswith("https://") for o in self.cors_allow_origins):
+            problems.append("CORS_ALLOW_ORIGINS may only list explicit https:// origins in production")
+        if self.ingestion_requires_operator is False:
+            problems.append("INGESTION_REQUIRES_OPERATOR must not be false in production")
+        if self.marketdata_provider == "fixture":
+            problems.append("MARKETDATA_PROVIDER must not be a test fixture in production")
+        return problems
+
     @model_validator(mode="after")
     def _execution_safeguards(self) -> "Settings":
         problems = self.execution_config_problems()
         if problems:
             raise ValueError("execution cannot be enabled: " + "; ".join(problems))
+        problems = self.production_config_problems()
+        if problems:
+            raise ValueError("unsafe production configuration: " + "; ".join(problems))
         return self
 
     @field_validator("execution_candle_timeframe")

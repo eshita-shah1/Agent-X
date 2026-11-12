@@ -1,4 +1,4 @@
-# Agent-X Backend — Architecture (Phases 1-6)
+# Agent-X Backend — Architecture (Phases 1-8)
 
 Modular monolith: FastAPI + SQLAlchemy 2 (sync, psycopg 3) + Alembic + PostgreSQL. Phase 1 is the foundation (auth,
 isolation, base schema); Phase 2 adds the market-data foundation (see [MARKET_DATA.md](MARKET_DATA.md)); Phase 3 adds
@@ -33,9 +33,10 @@ backend/
     agent/             Phase 5 (see below)
     explanations/      Phase 6: read-only facts, trade episodes, rule-based text, explanation service
     llm/               Phase 6: optional, provider-neutral narrator (no database, no services)
+    monitoring/        Phase 8: read-only health, readiness and agent observability; `python -m app.monitoring.cli health`
     journal/           Phase 6: journal service, automatic-entry sync, reflections, analytics
     api/v1/            auth, account, market, trading, operator, backtests, agent, explanations, journal routers; deps; schemas
-  alembic/             migrations 0001-0013 (see "Migration chain")
+  alembic/             migrations 0001-0014 (see "Migration chain")
   tests/               unit/, marketdata/, indicators/, strategies/, backtest/ (pure, no DB),
                        integration/ (real PostgreSQL); support.py (fake provider/clock)
 ```
@@ -126,7 +127,7 @@ Summary of what changed in the foundation:
 
 ## Migration chain
 
-One linear chain with a single head (`alembic heads` → `0013`):
+One linear chain with a single head (`alembic heads` → `0014`):
 
 | Revision | Purpose | Phase |
 |---|---|---|
@@ -143,6 +144,7 @@ One linear chain with a single head (`alembic heads` → `0013`):
 | `0011` | Protective-exit requirements (stale prices) | 4 |
 | `0012` | Agent orchestration: instances, configuration versions, cycles, decisions, events, instrument state | 5 |
 | `0013` | Journal entries, tags, reflections, stored trade explanations | 6 |
+| `0014` | `users.sessions_revoked_at` (logout) and the login-lockout index on `audit_events` | 8 |
 
 Phases 3 and 4 were developed in parallel, and Phase 4 reached `main` first. The Phase 3 migration was written as `0004`
 and renumbered to `0009` (parent `0008`) at integration. Its schema is unchanged, and `0001`-`0008` are unchanged.
@@ -228,6 +230,39 @@ Full design: [PHASE6.md](PHASE6.md).
   - Automatic entries are immutable apart from notes, and are never deleted.
   - Explanations are append-only.
 
+## Phase 8: hardening
+
+Full record: [PHASE8.md](PHASE8.md); also [SECURITY.md](SECURITY.md), [MONITORING.md](MONITORING.md),
+[BACKUP_RESTORE.md](BACKUP_RESTORE.md) and [DEPLOYMENT.md](DEPLOYMENT.md).
+
+- **HTTP layer** (`app/core/http.py`, one plain ASGI middleware):
+  - request ids and a structured request log;
+  - security headers;
+  - a body-size cap (413);
+  - safe JSON 500s.
+
+  Optional CORS allow-list. API docs are off outside development and test.
+- **Logging** (`app/core/logging.py`): JSON with context bound per request (`request_id`) and per agent cycle
+  (`agent_id`, `worker_id`, `cycle_id`), and redaction of secrets in messages, fields and tracebacks.
+- **Authentication:**
+  - logout revokes every session (`users.sessions_revoked_at`, migration `0014`);
+  - login lockout counted from the append-only audit log (indexed);
+  - production start-up rules for secrets, database, docs, CORS and ingestion (`Settings.production_config_problems`).
+- **Authorization:** market-data ingestion is operator-only in staging and production.
+- **Health** (`app/monitoring`, read-only, no parallel state):
+  - readiness = database plus migration head;
+  - `/api/v1/system/status` (user) and `/api/v1/system/agents` (operator);
+  - agent observability derived from `agent_instances` and `agent_cycles` with the agent's own staleness rule.
+- **Recovery** (`app/ops/backup.py`): manifest-verified `pg_dump` backups, an isolated `*_restore_check` restore with
+  row checksums, and retention. The alembic CLI requires an explicit target in staging and production.
+- **Delivery:**
+  - multi-stage non-root images;
+  - an nginx web image with CSP, rate limits and caching;
+  - a provider-neutral `docker-compose.prod.yml`;
+  - GitHub Actions CI and a gated image release (no deploy step).
+- **Boundaries** (`tests/phase8/test_boundaries.py`): monitoring and status code is read-only; hardening imports no
+  trading side effects or background machinery; execution stays disabled by default.
+
 ## What is deliberately not here
 
 - Risk configuration now exists as `risk_settings` (Phase 4) with **no defaults**: entries are rejected until the user saves every limit. Since Phase 5 the settings cannot change while the account's agent is RUNNING (`409 AGENT_RUNNING`).
@@ -242,13 +277,13 @@ Full design: [PHASE6.md](PHASE6.md).
 
 | Area | Current | Before hosted deployment |
 |---|---|---|
-| Refresh tokens | None; access token only (lifetime is a dev placeholder) | Refresh with rotation and revocation |
-| Logout / revocation | None; deactivated users are rejected on every request | Server-side session or revocation list (`jti`) |
-| Rate limiting | None | Per-IP and per-account throttling, backoff |
+| Refresh tokens | None; access token only (production: at most 60 minutes, enforced) | Refresh with rotation and revocation |
+| Logout / revocation | **Phase 8:** `POST /auth/logout` revokes every session (`sessions_revoked_at`); deactivated users rejected | Per-session revocation (`jti`) if needed |
+| Rate limiting | **Phase 8:** login lockout per email (database); nginx per-IP limits on login and API; LLM hourly budget | Shared-state limiter if several proxies run |
 | Duplicate registration | `409` reveals that an email is registered; emails unverified | Uniform response plus email verification |
 | User isolation | Application-level only (no PostgreSQL RLS); the app role owns the tables | Separate migration and runtime roles, then RLS with `FORCE` |
-| Secrets | Plaintext git-ignored `.env`; no JWT key rotation | Secrets manager, rotated credentials, key IDs |
-| Transport | No TLS, CORS or security headers; `/docs` exposed | TLS at a proxy, explicit CORS, restrict docs |
+| Secrets | Git-ignored env files; **Phase 8:** production refuses weak or placeholder secrets; logs redacted | Secrets manager, rotated credentials, key IDs |
+| Transport | **Phase 8:** security headers and CSP, optional explicit CORS, docs off outside development/test, HSTS in production; TLS documented, not deployed | TLS at the chosen proxy |
 | Audit storage | Failed-login events store the attempted email; unbounded | Retention policy and PII review |
 
 ## Operations

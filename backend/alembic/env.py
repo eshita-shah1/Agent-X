@@ -1,3 +1,5 @@
+import os
+import sys
 from logging.config import fileConfig
 
 from alembic import context
@@ -25,6 +27,19 @@ def _url():
     raise SystemExit(f"unknown -x db={target!r} (use 'main' or 'test')")
 
 
+def _confirm_target(database: str) -> None:
+    """Phase 8 wrong-database guard for command-line migrations (tests hand in their own connection and skip it).
+    The target is always announced; in staging and production it must also be confirmed explicitly with
+    AGENTX_MIGRATION_TARGET=<database>, so a migration can never run against an unintended database by accident."""
+    settings = get_settings()
+    print(f"alembic target database: {database} (ENVIRONMENT={settings.environment})", file=sys.stderr)
+    if settings.environment in ("staging", "production") and os.environ.get("AGENTX_MIGRATION_TARGET") != database:
+        raise SystemExit(
+            f"refusing to migrate {database!r} in {settings.environment}: back it up first (python -m app.ops.cli backup), "
+            f"then set AGENTX_MIGRATION_TARGET={database} to confirm"
+        )
+
+
 def run_migrations_offline() -> None:
     context.configure(url=_url(), target_metadata=target_metadata, literal_binds=True, compare_type=True)
     with context.begin_transaction():
@@ -39,7 +54,9 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
         return
-    engine = create_engine(_url())
+    url = _url()
+    _confirm_target(url.database)
+    engine = create_engine(url)
     with engine.connect() as conn:
         context.configure(connection=conn, target_metadata=target_metadata, compare_type=True)
         with context.begin_transaction():
