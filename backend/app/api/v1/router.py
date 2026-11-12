@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import account, agent, auth, backtests, market, operator, trading
+from app.api.v1 import account, agent, auth, backtests, explanations, journal, market, operator, trading
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
@@ -10,3 +10,5 @@ api_router.include_router(trading.router)
 api_router.include_router(operator.router)
 api_router.include_router(backtests.router)
 api_router.include_router(agent.router)
+api_router.include_router(explanations.router)
+api_router.include_router(journal.router)
